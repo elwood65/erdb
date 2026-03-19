@@ -46,6 +46,7 @@ type AnimeMappingProvider = 'mal' | 'anilist' | 'imdb' | 'tmdb' | 'anidb';
 type StreamBadgeKey = '4k' | 'hdr' | 'dolbyvision' | 'dolbyatmos' | 'remux';
 type BadgeKey = RatingPreference | StreamBadgeKey;
 type QualityBadgesSide = 'left' | 'right';
+type PosterQualityBadgesPosition = 'auto' | QualityBadgesSide;
 type StreamQualityFlags = {
   has4k: boolean;
   hasHdr: boolean;
@@ -427,6 +428,32 @@ const normalizeQualityBadgesSide = (value?: string | null): QualityBadgesSide =>
   const normalized = (value || '').trim().toLowerCase();
   if (['right', 'r', 'end'].includes(normalized)) return 'right';
   return 'left';
+};
+const normalizePosterQualityBadgesPosition = (value?: string | null): PosterQualityBadgesPosition => {
+  const normalized = (value || '').trim().toLowerCase();
+  if (!normalized || normalized === 'auto' || normalized === 'default') return 'auto';
+  if (['right', 'r', 'end'].includes(normalized)) return 'right';
+  if (['left', 'l', 'start'].includes(normalized)) return 'left';
+  return 'auto';
+};
+const resolvePosterQualityBadgePlacement = (
+  layout: PosterRatingLayout,
+  qualityBadgesSide: QualityBadgesSide,
+  posterQualityBadgesPosition: PosterQualityBadgesPosition
+): 'top' | 'bottom' | QualityBadgesSide => {
+  if (layout === 'left' || layout === 'right' || layout === 'left-right') {
+    return 'bottom';
+  }
+  if (layout === 'top-bottom') {
+    return qualityBadgesSide;
+  }
+  if (layout === 'top') {
+    return posterQualityBadgesPosition === 'auto' ? 'bottom' : posterQualityBadgesPosition;
+  }
+  if (layout === 'bottom') {
+    return posterQualityBadgesPosition === 'auto' ? 'top' : posterQualityBadgesPosition;
+  }
+  return qualityBadgesSide;
 };
 
 const normalizeQualityBadgesStyle = (value?: string | null): RatingStyle => {
@@ -1293,6 +1320,15 @@ const pickByLanguageWithFallback = (
   return items[0];
 };
 
+const isTextlessPosterSelection = (posters: any[] = [], selectedPoster?: any | null) => {
+  if (!Array.isArray(posters) || posters.length === 0 || !selectedPoster?.file_path) return false;
+
+  return posters.some(
+    (poster: any) =>
+      poster?.file_path === selectedPoster.file_path && normalizeImageLanguage(poster?.iso_639_1) === null
+  );
+};
+
 const pickPosterByPreference = (
   posters: any[] = [],
   preference: PosterTextPreference,
@@ -1401,6 +1437,7 @@ type FastRenderInput = {
   badges: RatingBadge[];
   qualityBadges: RatingBadge[];
   qualityBadgesSide: QualityBadgesSide;
+  posterQualityBadgesPosition: PosterQualityBadgesPosition;
   qualityBadgesStyle: RatingStyle;
   posterRatingsLayout: PosterRatingLayout;
   posterRatingsMaxPerSide: number | null;
@@ -2031,11 +2068,13 @@ const getMaxBadgeColumnCount = (
   outputHeight: number,
   metrics: BadgeLayoutMetrics,
   topOffset: number,
-  bottomOffset: number
+  bottomOffset: number,
+  reservedTopRows = 0
 ) => {
-  const availableHeight = Math.max(0, outputHeight - topOffset - bottomOffset);
   const badgeHeight = metrics.iconSize + metrics.paddingY * 2;
   const step = badgeHeight + metrics.gap;
+  const reservedTopHeight = reservedTopRows > 0 ? reservedTopRows * step : 0;
+  const availableHeight = Math.max(0, outputHeight - topOffset - bottomOffset - reservedTopHeight);
   if (badgeHeight <= 0 || step <= 0) return 1;
   return Math.max(1, Math.floor((availableHeight + metrics.gap) / step));
 };
@@ -2046,10 +2085,16 @@ const fitPosterBadgeMetricsToHeight = (
   initialMetrics: BadgeLayoutMetrics,
   topOffset: number,
   bottomOffset: number,
-  minMetrics: BadgeLayoutMetrics = DEFAULT_BADGE_MIN_METRICS
+  minMetrics: BadgeLayoutMetrics = DEFAULT_BADGE_MIN_METRICS,
+  reservedTopRows = 0
 ) => {
-  const maxColumnHeight = Math.max(0, outputHeight - topOffset - bottomOffset);
   const metrics: BadgeLayoutMetrics = { ...initialMetrics };
+  const getMaxColumnHeight = () => {
+    const badgeHeight = metrics.iconSize + metrics.paddingY * 2;
+    const reservedTopHeight =
+      reservedTopRows > 0 ? reservedTopRows * (badgeHeight + metrics.gap) : 0;
+    return Math.max(0, outputHeight - topOffset - bottomOffset - reservedTopHeight);
+  };
 
   const measureTallestColumn = () =>
     columns.reduce((maxHeight, column) => Math.max(maxHeight, measureBadgeColumnHeight(column, metrics)), 0);
@@ -2057,7 +2102,8 @@ const fitPosterBadgeMetricsToHeight = (
   let tallestColumn = measureTallestColumn();
   let attempts = 0;
 
-  while (tallestColumn > maxColumnHeight && attempts < 12) {
+  while (tallestColumn > getMaxColumnHeight() && attempts < 12) {
+    const maxColumnHeight = getMaxColumnHeight();
     const ratio = Math.max(0.84, Math.min(0.96, maxColumnHeight / tallestColumn));
     metrics.iconSize = Math.max(minMetrics.iconSize, Math.floor(metrics.iconSize * ratio));
     metrics.fontSize = Math.max(minMetrics.fontSize, Math.floor(metrics.fontSize * ratio));
@@ -2065,7 +2111,7 @@ const fitPosterBadgeMetricsToHeight = (
     metrics.paddingY = Math.max(minMetrics.paddingY, Math.floor(metrics.paddingY * ratio));
     metrics.gap = Math.max(minMetrics.gap, Math.floor(metrics.gap * ratio));
 
-    if (tallestColumn > maxColumnHeight) {
+    if (tallestColumn > getMaxColumnHeight()) {
       if (metrics.paddingY > minMetrics.paddingY) metrics.paddingY -= 1;
       else if (metrics.gap > minMetrics.gap) metrics.gap -= 1;
       else if (metrics.fontSize > minMetrics.fontSize) metrics.fontSize -= 1;
@@ -2113,7 +2159,19 @@ const splitPosterBadgesByLayout = (
   }
 
   if (layout === 'left-right') {
-    const columnSize = columnLimit || Math.ceil(limitedBadges.length / 2);
+    if (limitedBadges.length % 2 === 1) {
+      const topBadges = limitedBadges.slice(0, 1);
+      const sideBadges = limitedBadges.slice(1);
+      const columnSize = Math.ceil(sideBadges.length / 2);
+      return {
+        topBadges,
+        bottomBadges: [],
+        leftBadges: sideBadges.slice(0, columnSize),
+        rightBadges: sideBadges.slice(columnSize, columnSize * 2),
+      };
+    }
+
+    const columnSize = Math.ceil(limitedBadges.length / 2);
     return {
       topBadges: [],
       bottomBadges: [],
@@ -2412,15 +2470,23 @@ const renderWithSharp = async (
       input.posterRatingsLayout !== 'left' &&
       input.posterRatingsLayout !== 'right' &&
       input.posterRatingsLayout !== 'left-right';
+    const posterQualityBadgePlacement =
+      input.imageType === 'poster'
+        ? resolvePosterQualityBadgePlacement(
+            input.posterRatingsLayout,
+            input.qualityBadgesSide,
+            input.posterQualityBadgesPosition
+          )
+        : null;
+    const posterQualityBadgeSidePlacement =
+      posterQualityBadgePlacement === 'left' || posterQualityBadgePlacement === 'right'
+        ? posterQualityBadgePlacement
+        : null;
     const posterRowRegionWidth = Math.max(0, input.outputWidth - input.posterRowHorizontalInset * 2);
     const alignPosterRowWithQuality =
-      input.imageType === 'poster' &&
-      input.qualityBadges.length > 0 &&
-      (input.posterRatingsLayout === 'top' ||
-        input.posterRatingsLayout === 'bottom' ||
-        input.posterRatingsLayout === 'top-bottom');
+      input.imageType === 'poster' && input.qualityBadges.length > 0 && posterQualityBadgeSidePlacement !== null;
     const posterRowAlign: 'left' | 'center' | 'right' = alignPosterRowWithQuality
-      ? input.qualityBadgesSide === 'right'
+      ? posterQualityBadgeSidePlacement === 'right'
         ? 'right'
         : 'left'
       : 'center';
@@ -2462,6 +2528,8 @@ const renderWithSharp = async (
         regionLeft?: number;
         regionWidth?: number;
         align?: 'left' | 'center' | 'right';
+        splitAcrossHalves?: boolean;
+        spreadAcrossThirds?: boolean;
       }
     ) => {
       if (rowBadges.length === 0) return;
@@ -2531,8 +2599,10 @@ const renderWithSharp = async (
           input.posterRatingsLayout === 'bottom' ||
           input.posterRatingsLayout === 'top-bottom');
       const shouldCenterSingle = isPosterRowLayout && rowEntries.length === 1;
-      const shouldSplitRow = isPosterRowLayout && rowEntries.length === 2;
-      const shouldSpreadRow = isPosterRowLayout && rowEntries.length === 3;
+      const shouldSplitRow =
+        (isPosterRowLayout || options?.splitAcrossHalves === true) && rowEntries.length === 2;
+      const shouldSpreadRow =
+        (isPosterRowLayout || options?.spreadAcrossThirds === true) && rowEntries.length === 3;
       if (shouldCenterSingle) {
         const centerX =
           regionLeft + Math.floor(regionWidth / 2) - Math.floor(rowEntries[0].badgeWidth / 2);
@@ -2721,50 +2791,59 @@ const renderWithSharp = async (
       );
       overlays.push({ input: overlay.buffer, top: overlayY, left: overlayX });
     };
+    const composeEdgeAlignedPosterBadge = (
+      badge: RatingBadge,
+      rowY: number,
+      side: 'left' | 'right',
+      maxBadgeWidth: number
+    ) => {
+      const estimatedWidth = estimateBadgeWidth(
+        badge.value,
+        input.badgeFontSize,
+        input.badgePaddingX,
+        input.badgeIconSize,
+        input.badgeGap
+      );
+      const badgeWidth = Math.min(estimatedWidth, maxBadgeWidth);
+      const rowX =
+        side === 'left'
+          ? 12
+          : Math.max(12, input.outputWidth - badgeWidth - 12);
+      const monogram = buildProviderMonogram(
+        badge.label || String(badge.key).toUpperCase()
+      );
+      const badgeSvg = buildBadgeSvg({
+        width: badgeWidth,
+        height: badgeHeight,
+        iconSize: input.badgeIconSize,
+        fontSize: input.badgeFontSize,
+        paddingX: input.badgePaddingX,
+        gap: input.badgeGap,
+        accentColor: badge.accentColor,
+        monogram,
+        iconDataUri: iconByProvider.get(badge.key) || null,
+        value: badge.value,
+        ratingStyle: input.ratingStyle,
+      });
+      overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: rowX });
+    };
     const composeBadgeColumn = (
       columnBadges: RatingBadge[],
       side: 'left' | 'right',
       maxBadgeWidth: number,
-      origin: 'top' | 'bottom' = 'top'
+      origin: 'top' | 'bottom' = 'top',
+      startY?: number
     ) => {
       if (columnBadges.length === 0) return;
-      const widths = columnBadges.map((badge) =>
-        estimateBadgeWidth(
-          badge.value,
-          input.badgeFontSize,
-          input.badgePaddingX,
-          input.badgeIconSize,
-          input.badgeGap
-        )
-      );
       let rowY =
-        origin === 'bottom'
+        typeof startY === 'number'
+          ? Math.max(input.badgeTopOffset, startY)
+          : origin === 'bottom'
           ? Math.max(input.badgeTopOffset, input.outputHeight - input.badgeBottomOffset - badgeHeight)
           : input.badgeTopOffset;
       for (let index = 0; index < columnBadges.length; index += 1) {
         const badge = columnBadges[index];
-        const badgeWidth = Math.min(widths[index], maxBadgeWidth);
-        const rowX =
-          side === 'left'
-            ? 12
-            : Math.max(12, input.outputWidth - badgeWidth - 12);
-        const monogram = buildProviderMonogram(
-          badge.label || String(badge.key).toUpperCase()
-        );
-        const badgeSvg = buildBadgeSvg({
-          width: badgeWidth,
-          height: badgeHeight,
-          iconSize: input.badgeIconSize,
-          fontSize: input.badgeFontSize,
-          paddingX: input.badgePaddingX,
-          gap: input.badgeGap,
-          accentColor: badge.accentColor,
-          monogram,
-          iconDataUri: iconByProvider.get(badge.key) || null,
-          value: badge.value,
-          ratingStyle: input.ratingStyle,
-        });
-        overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: rowX });
+        composeEdgeAlignedPosterBadge(badge, rowY, side, maxBadgeWidth);
         rowY += origin === 'bottom' ? -(badgeHeight + input.badgeGap) : badgeHeight + input.badgeGap;
       }
     };
@@ -2924,8 +3003,45 @@ const renderWithSharp = async (
           );
         } else if (input.posterRatingsLayout === 'left-right') {
           const maxBadgeWidth = Math.max(160, Math.floor((input.outputWidth - 36) / 2));
-          composeBadgeColumn(input.leftBadges, 'left', maxBadgeWidth);
-          composeBadgeColumn(input.rightBadges, 'right', maxBadgeWidth);
+          const hasThreeBadgeTopRow =
+            input.topBadges.length === 1 &&
+            input.leftBadges.length > 0 &&
+            input.rightBadges.length > 0;
+          const remainingLeftBadges = hasThreeBadgeTopRow ? input.leftBadges.slice(1) : input.leftBadges;
+          const remainingRightBadges = hasThreeBadgeTopRow ? input.rightBadges.slice(1) : input.rightBadges;
+
+          if (hasThreeBadgeTopRow) {
+            composeBadgeRow(
+              [input.leftBadges[0], input.topBadges[0], input.rightBadges[0]],
+              input.badgeTopOffset,
+              {
+                regionLeft: 0,
+                regionWidth: input.outputWidth,
+                spreadAcrossThirds: true,
+              }
+            );
+          } else if (input.topBadges.length > 0) {
+            composeBadgeRow(input.topBadges, input.badgeTopOffset, {
+              regionLeft: input.posterRowHorizontalInset,
+              regionWidth: posterRowRegionWidth,
+              align: 'center',
+            });
+          }
+
+          const sideStartY =
+            input.topBadges.length > 0
+              ? input.badgeTopOffset + badgeHeight + input.badgeGap
+              : input.badgeTopOffset;
+          if (remainingLeftBadges.length === remainingRightBadges.length) {
+            for (let index = 0; index < remainingLeftBadges.length; index += 1) {
+              const rowY = sideStartY + index * (badgeHeight + input.badgeGap);
+              composeEdgeAlignedPosterBadge(remainingLeftBadges[index], rowY, 'left', maxBadgeWidth);
+              composeEdgeAlignedPosterBadge(remainingRightBadges[index], rowY, 'right', maxBadgeWidth);
+            }
+          } else {
+            composeBadgeColumn(remainingLeftBadges, 'left', maxBadgeWidth, 'top', sideStartY);
+            composeBadgeColumn(remainingRightBadges, 'right', maxBadgeWidth, 'top', sideStartY);
+          }
         } else {
           if (input.topBadges.length > 0) {
             composeBadgeRow(input.topBadges, input.badgeTopOffset, {
@@ -2947,18 +3063,11 @@ const renderWithSharp = async (
     }
 
     if (input.imageType === 'poster' && input.qualityBadges.length > 0) {
-      const qualityPlacement =
-        input.posterRatingsLayout === 'left'
-          ? 'bottom'
-          : input.posterRatingsLayout === 'right'
-            ? 'bottom'
-            : input.posterRatingsLayout === 'left-right'
-              ? 'bottom'
-              : input.posterRatingsLayout === 'top'
-                ? 'bottom'
-                : input.posterRatingsLayout === 'bottom'
-                  ? 'top'
-                  : input.qualityBadgesSide;
+      const qualityPlacement = resolvePosterQualityBadgePlacement(
+        input.posterRatingsLayout,
+        input.qualityBadgesSide,
+        input.posterQualityBadgesPosition
+      );
       const metrics: BadgeLayoutMetrics = {
         iconSize: input.badgeIconSize,
         fontSize: input.badgeFontSize,
@@ -3193,6 +3302,9 @@ export async function GET(
     request.nextUrl.searchParams.get('qualityBadgesSide') ||
       request.nextUrl.searchParams.get('qualityBadgesPosition')
   );
+  const posterQualityBadgesPosition = normalizePosterQualityBadgesPosition(
+    request.nextUrl.searchParams.get('posterQualityBadgesPosition')
+  );
   const globalQualityBadgesStyle = normalizeQualityBadgesStyle(
     request.nextUrl.searchParams.get('qualityBadgesStyle')
   );
@@ -3315,6 +3427,9 @@ export async function GET(
     imageType === 'poster' ? posterRatingsLayout : '-',
     imageType === 'poster' ? String(posterRatingsMaxPerSide ?? 'auto') : '-',
     imageType === 'poster' ? qualityBadgesSide : '-',
+    imageType === 'poster' && (posterRatingsLayout === 'top' || posterRatingsLayout === 'bottom')
+      ? posterQualityBadgesPosition
+      : '-',
     imageType !== 'logo' ? qualityBadgesStyle : '-',
     imageType === 'backdrop' ? backdropRatingsLayout : '-',
     ratingStyle,
@@ -3553,6 +3668,7 @@ export async function GET(
       let outputHeight = 720;
       let selectedLogoAspectRatio: number | null = null;
       let selectedPosterLogoPath: string | null = null;
+      let selectedPosterIsTextless = false;
       const requestedExternalRatings = new Set([...selectedRatings]);
       const needsAnimeOnlyRatings = [...requestedExternalRatings].some((provider) =>
         ANIME_ONLY_RATING_PROVIDER_SET.has(provider)
@@ -3567,10 +3683,6 @@ export async function GET(
       const shouldRenderRatings = shouldApplyRatings && (!useRawKitsuFallback || shouldRenderRawKitsuFallbackRating);
       const shouldRenderStreamBadges = shouldApplyStreamBadges && !isAnimeContent;
       const shouldRenderBadges = shouldRenderRatings || shouldRenderStreamBadges;
-      const posterTitleText =
-        imageType === 'poster' && posterTextPreference === 'clean'
-          ? pickPosterTitleFromMedia(media, mediaType, rawFallbackTitle)
-          : null;
       const releaseDateForCache =
         mediaType === 'movie' ? media?.release_date : mediaType === 'tv' ? media?.first_air_date : null;
       const tmdbIdForCache =
@@ -3614,6 +3726,9 @@ export async function GET(
         imageType === 'poster' ? posterRatingsLayout : '-',
         imageType === 'poster' ? String(posterRatingsMaxPerSide ?? 'auto') : '-',
         imageType === 'poster' ? qualityBadgesSide : '-',
+        imageType === 'poster' && (posterRatingsLayout === 'top' || posterRatingsLayout === 'bottom')
+          ? posterQualityBadgesPosition
+          : '-',
         imageType !== 'logo' ? qualityBadgesStyle : '-',
         imageType === 'backdrop' ? backdropRatingsLayout : '-',
         ratingStyle,
@@ -4136,10 +4251,12 @@ export async function GET(
               FALLBACK_IMAGE_LANGUAGE,
               originalPosterPath
             );
+            const selectedPosterIsTextless = isTextlessPosterSelection(posterCollection, selectedPoster);
             return {
               imgPath: selectedPoster?.file_path || '',
               logoAspectRatio: null,
               logoPath,
+              posterIsTextless: selectedPosterIsTextless,
             };
           }
 
@@ -4155,6 +4272,7 @@ export async function GET(
               imgPath: selectedBackdrop?.file_path || '',
               logoAspectRatio: null,
               logoPath,
+              posterIsTextless: false,
             };
           }
 
@@ -4162,7 +4280,7 @@ export async function GET(
             typeof selectedLogo?.aspect_ratio === 'number' && selectedLogo.aspect_ratio > 0
               ? selectedLogo.aspect_ratio
               : null;
-          return { imgPath: logoPath || '', logoAspectRatio, logoPath };
+          return { imgPath: logoPath || '', logoAspectRatio, logoPath, posterIsTextless: false };
         };
 
         const initialImages = bundledImages || {};
@@ -4176,7 +4294,13 @@ export async function GET(
         imgPath = initialSelection.imgPath;
         selectedLogoAspectRatio = initialSelection.logoAspectRatio;
         selectedPosterLogoPath = initialSelection.logoPath || null;
-        if (imageType === 'poster' && posterTextPreference === 'clean' && !selectedPosterLogoPath) {
+        selectedPosterIsTextless = initialSelection.posterIsTextless;
+        if (
+          imageType === 'poster' &&
+          posterTextPreference === 'clean' &&
+          selectedPosterIsTextless &&
+          !selectedPosterLogoPath
+        ) {
           const logoFallbackImagesResponse = await fetchJsonCached(
             `tmdb:${mediaType}:${media.id}:images:all`,
             `https://api.themoviedb.org/3/${mediaType}/${media.id}/images?api_key=${tmdbKey}`,
@@ -4224,6 +4348,7 @@ export async function GET(
               imgPath = fallbackSelection.imgPath;
               selectedLogoAspectRatio = fallbackSelection.logoAspectRatio;
               selectedPosterLogoPath = fallbackSelection.logoPath || selectedPosterLogoPath;
+              selectedPosterIsTextless = fallbackSelection.posterIsTextless;
               if (selectedLogoAspectRatio) {
                 outputWidth = Math.max(
                   LOGO_MIN_WIDTH,
@@ -4241,8 +4366,13 @@ export async function GET(
       if (!imgUrl) {
         imgUrl = buildTmdbImageUrl(imageType, imgPath, outputWidth);
       }
+      const shouldApplyPosterCleanOverlay =
+        imageType === 'poster' && posterTextPreference === 'clean' && selectedPosterIsTextless;
+      const posterTitleText = shouldApplyPosterCleanOverlay
+        ? pickPosterTitleFromMedia(media, mediaType, rawFallbackTitle)
+        : null;
       const posterLogoUrl =
-        imageType === 'poster' && posterTextPreference === 'clean' && selectedPosterLogoPath
+        shouldApplyPosterCleanOverlay && selectedPosterLogoPath
           ? buildTmdbImageUrl('logo', selectedPosterLogoPath, outputWidth)
           : null;
       if (!shouldRenderBadges && !posterTitleText && !posterLogoUrl) {
@@ -4380,10 +4510,19 @@ export async function GET(
       if (usePosterBadgeLayout && cappedRatingBadges.length > 0) {
         let fittedPosterMetrics: BadgeLayoutMetrics;
         if (posterRatingsLayout === 'left' || posterRatingsLayout === 'right' || posterRatingsLayout === 'left-right') {
-          const posterColumns = [leftRatingBadges, rightRatingBadges].filter((column) => column.length > 0);
+          const useThreeBadgeTopRow =
+            posterRatingsLayout === 'left-right' &&
+            topRatingBadges.length === 1 &&
+            leftRatingBadges.length > 0 &&
+            rightRatingBadges.length > 0;
+          const fittedLeftColumn = useThreeBadgeTopRow ? leftRatingBadges.slice(1) : leftRatingBadges;
+          const fittedRightColumn = useThreeBadgeTopRow ? rightRatingBadges.slice(1) : rightRatingBadges;
+          const posterColumns = [fittedLeftColumn, fittedRightColumn].filter((column) => column.length > 0);
           const widthRows = posterColumns.flatMap((column) => column.map((badge) => [badge]));
           const alignPosterQualityBadges =
             (posterRatingsLayout === 'left' || posterRatingsLayout === 'right') && streamBadges.length > 0;
+          const reservedTopRows =
+            posterRatingsLayout === 'left-right' && topRatingBadges.length > 0 ? 1 : 0;
           const posterColumnMaxWidth =
             posterRatingsLayout === 'left-right'
               ? Math.max(160, Math.floor((outputWidth - 36) / 2))
@@ -4403,22 +4542,26 @@ export async function GET(
             fittedPosterMetrics,
             badgeTopOffset,
             badgeBottomOffset,
-            posterMinMetrics
+            posterMinMetrics,
+            reservedTopRows
           );
           const maxPerColumn = getMaxBadgeColumnCount(
             outputHeight,
             fittedPosterMetrics,
             badgeTopOffset,
-            badgeBottomOffset
+            badgeBottomOffset,
+            reservedTopRows
           );
           const effectiveMaxPerSide =
-            posterRatingsMaxPerSide === null ? maxPerColumn : Math.min(maxPerColumn, posterRatingsMaxPerSide);
+            posterRatingsMaxPerSide === null
+              ? maxPerColumn + (useThreeBadgeTopRow ? 1 : 0)
+              : Math.min(maxPerColumn + (useThreeBadgeTopRow ? 1 : 0), posterRatingsMaxPerSide);
           posterBadgeGroups = splitPosterBadgesByLayout(cappedRatingBadges, posterRatingsLayout, effectiveMaxPerSide);
           topRatingBadges = posterBadgeGroups.topBadges;
           bottomRatingBadges = posterBadgeGroups.bottomBadges;
           leftRatingBadges = posterBadgeGroups.leftBadges;
           rightRatingBadges = posterBadgeGroups.rightBadges;
-          cappedRatingBadges = [...leftRatingBadges, ...rightRatingBadges];
+          cappedRatingBadges = [...topRatingBadges, ...leftRatingBadges, ...rightRatingBadges];
         } else {
           const posterRowFitWidth = usePosterRowLayout
             ? Math.max(0, outputWidth - posterRowHorizontalInset * 2)
@@ -4567,6 +4710,7 @@ export async function GET(
           badges: badgesForIcons,
           qualityBadges,
           qualityBadgesSide,
+          posterQualityBadgesPosition,
           qualityBadgesStyle,
           posterRatingsLayout,
           posterRatingsMaxPerSide,
