@@ -56,6 +56,7 @@ const VISIBLE_RATING_PROVIDER_OPTIONS = RATING_PROVIDER_OPTIONS;
 const PROXY_TYPES = ['poster', 'backdrop', 'logo'] as const;
 type ProxyType = (typeof PROXY_TYPES)[number];
 type ProxyEnabledTypes = Record<ProxyType, boolean>;
+type AiometadataPatternType = 'poster' | 'background' | 'logo' | 'episodeThumbnail';
 type StreamBadgesSetting = 'auto' | 'on' | 'off';
 type QualityBadgesSide = 'left' | 'right';
 type PosterQualityBadgesPosition = 'auto' | QualityBadgesSide;
@@ -175,6 +176,210 @@ const decodeBase64Url = (value: string) => {
   return new TextDecoder().decode(bytes);
 };
 
+const buildAiometadataPattern = (options: {
+  baseUrl: string;
+  imageType: 'poster' | 'backdrop' | 'logo';
+  idPlaceholder: string;
+  tmdbKey: string;
+  mdblistKey: string;
+  simklClientId: string;
+  lang: string;
+  posterRatings: string;
+  backdropRatings: string;
+  logoRatings: string;
+  posterStreamBadges: StreamBadgesSetting;
+  backdropStreamBadges: StreamBadgesSetting;
+  shouldShowPosterQualityBadgesSide: boolean;
+  shouldShowPosterQualityBadgesPosition: boolean;
+  qualityBadgesSide: QualityBadgesSide;
+  posterQualityBadgesPosition: PosterQualityBadgesPosition;
+  posterQualityBadgesStyle: RatingStyle;
+  backdropQualityBadgesStyle: RatingStyle;
+  posterRatingStyle: RatingStyle;
+  backdropRatingStyle: RatingStyle;
+  logoRatingStyle: RatingStyle;
+  posterImageText: 'original' | 'clean' | 'alternative';
+  backdropImageText: 'original' | 'clean' | 'alternative';
+  posterRatingsLayout: PosterRatingLayout;
+  posterRatingsMaxPerSide: number | null;
+  backdropRatingsLayout: BackdropRatingLayout;
+}) => {
+  const {
+    baseUrl,
+    imageType,
+    idPlaceholder,
+    tmdbKey,
+    mdblistKey,
+    simklClientId,
+    lang,
+    posterRatings,
+    backdropRatings,
+    logoRatings,
+    posterStreamBadges,
+    backdropStreamBadges,
+    shouldShowPosterQualityBadgesSide,
+    shouldShowPosterQualityBadgesPosition,
+    qualityBadgesSide,
+    posterQualityBadgesPosition,
+    posterQualityBadgesStyle,
+    backdropQualityBadgesStyle,
+    posterRatingStyle,
+    backdropRatingStyle,
+    logoRatingStyle,
+    posterImageText,
+    backdropImageText,
+    posterRatingsLayout,
+    posterRatingsMaxPerSide,
+    backdropRatingsLayout,
+  } = options;
+
+  if (!baseUrl || !tmdbKey || !mdblistKey) {
+    return '';
+  }
+
+  const params: Array<[string, string]> = [
+    ['tmdbKey', tmdbKey || '{tmdb_key}'],
+    ['mdblistKey', mdblistKey || '{mdblist_key}'],
+    ['lang', '{language_short}'],
+  ];
+
+  if (simklClientId) {
+    params.push(['simklClientId', simklClientId]);
+  }
+
+  if (imageType === 'poster') {
+    params.push(['posterRatings', posterRatings]);
+    if (posterStreamBadges !== 'auto') {
+      params.push(['posterStreamBadges', posterStreamBadges]);
+    }
+    if (shouldShowPosterQualityBadgesSide && qualityBadgesSide !== 'left') {
+      params.push(['qualityBadgesSide', qualityBadgesSide]);
+    }
+    if (shouldShowPosterQualityBadgesPosition && posterQualityBadgesPosition !== 'auto') {
+      params.push(['posterQualityBadgesPosition', posterQualityBadgesPosition]);
+    }
+    if (posterQualityBadgesStyle !== DEFAULT_QUALITY_BADGES_STYLE) {
+      params.push(['posterQualityBadgesStyle', posterQualityBadgesStyle]);
+    }
+    params.push(['ratingStyle', posterRatingStyle]);
+    params.push(['imageText', posterImageText]);
+    params.push(['posterRatingsLayout', posterRatingsLayout]);
+    if (isVerticalPosterRatingLayout(posterRatingsLayout) && posterRatingsMaxPerSide !== null) {
+      params.push(['posterRatingsMaxPerSide', String(posterRatingsMaxPerSide)]);
+    }
+  } else if (imageType === 'backdrop') {
+    params.push(['backdropRatings', backdropRatings]);
+    if (backdropStreamBadges !== 'auto') {
+      params.push(['backdropStreamBadges', backdropStreamBadges]);
+    }
+    if (backdropQualityBadgesStyle !== DEFAULT_QUALITY_BADGES_STYLE) {
+      params.push(['backdropQualityBadgesStyle', backdropQualityBadgesStyle]);
+    }
+    params.push(['ratingStyle', backdropRatingStyle]);
+    params.push(['imageText', backdropImageText]);
+    params.push(['backdropRatingsLayout', backdropRatingsLayout]);
+  } else {
+    params.push(['logoRatings', logoRatings]);
+    params.push(['ratingStyle', logoRatingStyle]);
+  }
+
+  const query = params
+    .filter(([, value]) => value !== '')
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+
+  return `${baseUrl}/${imageType}/${idPlaceholder}.jpg?${query}`;
+};
+
+const buildAiometadataPatternBlock = (options: {
+  baseUrl: string;
+  imageType: 'poster' | 'backdrop' | 'logo';
+  tmdbKey: string;
+  mdblistKey: string;
+  simklClientId: string;
+  lang: string;
+  posterRatings: string;
+  backdropRatings: string;
+  logoRatings: string;
+  posterStreamBadges: StreamBadgesSetting;
+  backdropStreamBadges: StreamBadgesSetting;
+  shouldShowPosterQualityBadgesSide: boolean;
+  shouldShowPosterQualityBadgesPosition: boolean;
+  qualityBadgesSide: QualityBadgesSide;
+  posterQualityBadgesPosition: PosterQualityBadgesPosition;
+  posterQualityBadgesStyle: RatingStyle;
+  backdropQualityBadgesStyle: RatingStyle;
+  posterRatingStyle: RatingStyle;
+  backdropRatingStyle: RatingStyle;
+  logoRatingStyle: RatingStyle;
+  posterImageText: 'original' | 'clean' | 'alternative';
+  backdropImageText: 'original' | 'clean' | 'alternative';
+  posterRatingsLayout: PosterRatingLayout;
+  posterRatingsMaxPerSide: number | null;
+  backdropRatingsLayout: BackdropRatingLayout;
+}) => {
+  const params: Array<[string, string]> = [
+    ['imdb', '{imdb_id}'],
+    ['tmdb', '{tmdb_id}'],
+    ['tvdb', '{tvdb_id}'],
+    ['mal', '{mal_id}'],
+    ['kitsu', '{kitsu_id}'],
+    ['anilist', '{anilist_id}'],
+    ['anidb', '{anidb_id}'],
+    ['type', '{type}'],
+    ['tmdbKey', options.tmdbKey],
+    ['mdblistKey', options.mdblistKey],
+    ['lang', '{language_short}'],
+  ];
+
+  if (options.simklClientId) {
+    params.push(['simklClientId', options.simklClientId]);
+  }
+
+  if (options.imageType === 'poster') {
+    params.push(['posterRatings', options.posterRatings]);
+    if (options.posterStreamBadges !== 'auto') {
+      params.push(['posterStreamBadges', options.posterStreamBadges]);
+    }
+    if (options.shouldShowPosterQualityBadgesSide && options.qualityBadgesSide !== 'left') {
+      params.push(['qualityBadgesSide', options.qualityBadgesSide]);
+    }
+    if (options.shouldShowPosterQualityBadgesPosition && options.posterQualityBadgesPosition !== 'auto') {
+      params.push(['posterQualityBadgesPosition', options.posterQualityBadgesPosition]);
+    }
+    if (options.posterQualityBadgesStyle !== DEFAULT_QUALITY_BADGES_STYLE) {
+      params.push(['posterQualityBadgesStyle', options.posterQualityBadgesStyle]);
+    }
+    params.push(['ratingStyle', options.posterRatingStyle]);
+    params.push(['imageText', options.posterImageText]);
+    params.push(['posterRatingsLayout', options.posterRatingsLayout]);
+    if (isVerticalPosterRatingLayout(options.posterRatingsLayout) && options.posterRatingsMaxPerSide !== null) {
+      params.push(['posterRatingsMaxPerSide', String(options.posterRatingsMaxPerSide)]);
+    }
+  } else if (options.imageType === 'backdrop') {
+    params.push(['backdropRatings', options.backdropRatings]);
+    if (options.backdropStreamBadges !== 'auto') {
+      params.push(['backdropStreamBadges', options.backdropStreamBadges]);
+    }
+    if (options.backdropQualityBadgesStyle !== DEFAULT_QUALITY_BADGES_STYLE) {
+      params.push(['backdropQualityBadgesStyle', options.backdropQualityBadgesStyle]);
+    }
+    params.push(['ratingStyle', options.backdropRatingStyle]);
+    params.push(['imageText', options.backdropImageText]);
+    params.push(['backdropRatingsLayout', options.backdropRatingsLayout]);
+  } else {
+    params.push(['logoRatings', options.logoRatings]);
+    params.push(['ratingStyle', options.logoRatingStyle]);
+  }
+
+  const query = params
+    .filter(([, value]) => value !== '')
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+
+  return `${options.baseUrl}/resolve/${options.imageType}?${query}`;
+};
+
 const downloadJsonFile = (payload: Record<string, unknown>, filename: string) => {
   if (typeof window === 'undefined') return;
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -229,6 +434,7 @@ export default function Home() {
   const [configCopied, setConfigCopied] = useState(false);
   const [showConfigString, setShowConfigString] = useState(false);
   const [showProxyUrl, setShowProxyUrl] = useState(false);
+  const [aiometadataCopiedType, setAiometadataCopiedType] = useState<AiometadataPatternType | null>(null);
   const [exportStatus, setExportStatus] = useState<'idle' | 'with' | 'without'>('idle');
   const [importStatus, setImportStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [importMessage, setImportMessage] = useState('');
@@ -734,6 +940,125 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     baseUrl,
   ]);
 
+  const aiometadataPatterns = useMemo(() => {
+    const tmdb = tmdbKey.trim();
+    const mdb = mdblistKey.trim();
+    const simkl = simklClientId.trim();
+    const posterRatings = stringifyRatingPreferencesAllowEmpty(posterRatingPreferences);
+    const backdropRatings = stringifyRatingPreferencesAllowEmpty(backdropRatingPreferences);
+    const logoRatings = stringifyRatingPreferencesAllowEmpty(logoRatingPreferences);
+
+    return {
+      poster: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'poster',
+        tmdbKey: tmdb,
+        mdblistKey: mdb,
+        simklClientId: simkl,
+        lang,
+        posterRatings,
+        backdropRatings,
+        logoRatings,
+        posterStreamBadges,
+        backdropStreamBadges,
+        shouldShowPosterQualityBadgesSide,
+        shouldShowPosterQualityBadgesPosition,
+        qualityBadgesSide,
+        posterQualityBadgesPosition,
+        posterQualityBadgesStyle,
+        backdropQualityBadgesStyle,
+        posterRatingStyle,
+        backdropRatingStyle,
+        logoRatingStyle,
+        posterImageText,
+        backdropImageText,
+        posterRatingsLayout,
+        posterRatingsMaxPerSide,
+        backdropRatingsLayout,
+      }),
+      background: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'backdrop',
+        tmdbKey: tmdb,
+        mdblistKey: mdb,
+        simklClientId: simkl,
+        lang,
+        posterRatings,
+        backdropRatings,
+        logoRatings,
+        posterStreamBadges,
+        backdropStreamBadges,
+        shouldShowPosterQualityBadgesSide,
+        shouldShowPosterQualityBadgesPosition,
+        qualityBadgesSide,
+        posterQualityBadgesPosition,
+        posterQualityBadgesStyle,
+        backdropQualityBadgesStyle,
+        posterRatingStyle,
+        backdropRatingStyle,
+        logoRatingStyle,
+        posterImageText,
+        backdropImageText,
+        posterRatingsLayout,
+        posterRatingsMaxPerSide,
+        backdropRatingsLayout,
+      }),
+      logo: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'logo',
+        tmdbKey: tmdb,
+        mdblistKey: mdb,
+        simklClientId: simkl,
+        lang,
+        posterRatings,
+        backdropRatings,
+        logoRatings,
+        posterStreamBadges,
+        backdropStreamBadges,
+        shouldShowPosterQualityBadgesSide,
+        shouldShowPosterQualityBadgesPosition,
+        qualityBadgesSide,
+        posterQualityBadgesPosition,
+        posterQualityBadgesStyle,
+        backdropQualityBadgesStyle,
+        posterRatingStyle,
+        backdropRatingStyle,
+        logoRatingStyle,
+        posterImageText,
+        backdropImageText,
+        posterRatingsLayout,
+        posterRatingsMaxPerSide,
+        backdropRatingsLayout,
+      }),
+      episodeThumbnail: '',
+    };
+  }, [
+    baseUrl,
+    tmdbKey,
+    mdblistKey,
+    simklClientId,
+    lang,
+    posterRatingPreferences,
+    backdropRatingPreferences,
+    logoRatingPreferences,
+    posterStreamBadges,
+    backdropStreamBadges,
+    shouldShowPosterQualityBadgesSide,
+    shouldShowPosterQualityBadgesPosition,
+    qualityBadgesSide,
+    posterQualityBadgesPosition,
+    posterQualityBadgesStyle,
+    backdropQualityBadgesStyle,
+    posterRatingStyle,
+    backdropRatingStyle,
+    logoRatingStyle,
+    posterImageText,
+    backdropImageText,
+    posterRatingsLayout,
+    posterRatingsMaxPerSide,
+    backdropRatingsLayout,
+  ]);
+
   const updateRatingRowsForType = (
     type: 'poster' | 'backdrop' | 'logo',
     updater: (current: RatingProviderRow[]) => RatingProviderRow[]
@@ -793,6 +1118,14 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     setProxyCopied(true);
     setTimeout(() => setProxyCopied(false), 2000);
   }, [proxyUrl]);
+
+  const handleCopyAiometadataPattern = useCallback((type: AiometadataPatternType) => {
+    const value = aiometadataPatterns[type];
+    if (!value) return;
+    navigator.clipboard.writeText(value);
+    setAiometadataCopiedType(type);
+    setTimeout(() => setAiometadataCopiedType((current) => (current === type ? null : current)), 2000);
+  }, [aiometadataPatterns]);
 
   const handleExportConfig = (includeKeys: boolean) => {
     const payload: Record<string, unknown> = {
@@ -1081,6 +1414,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       configCopied,
       proxyCopied,
       copied,
+      aiometadataCopiedType,
     },
     derived: {
       baseUrl,
@@ -1103,6 +1437,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       qualityBadgeTypeLabel,
       activeStreamBadges,
       activeQualityBadgesStyle,
+      aiometadataPatterns,
     },
     actions: {
       handleAnchorClick,
@@ -1111,6 +1446,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       handleCopyConfig,
       handleCopyProxy,
       handleCopyPrompt,
+      handleCopyAiometadataPattern,
       setPreviewType,
       setMediaId,
       setLang,
