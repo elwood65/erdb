@@ -1,6 +1,4 @@
 'use client';
-
-import Image from 'next/image';
 import type { ChangeEvent, Dispatch, MouseEvent, RefObject, SetStateAction } from 'react';
 import {
   Image as ImageIcon,
@@ -30,6 +28,14 @@ import {
   type BackdropRatingLayout,
 } from '@/lib/backdropRatingLayout';
 import {
+  THUMBNAIL_RATING_LAYOUT_OPTIONS,
+  type ThumbnailRatingLayout,
+} from '@/lib/thumbnailRatingLayout';
+import {
+  THUMBNAIL_SIZE_OPTIONS,
+  type ThumbnailSize,
+} from '@/lib/thumbnailSize';
+import {
   POSTER_RATING_LAYOUT_OPTIONS,
   isVerticalPosterRatingLayout,
   type PosterRatingLayout,
@@ -39,8 +45,9 @@ import {
   type RatingStyle,
 } from '@/lib/ratingStyle';
 
-type PreviewType = 'poster' | 'backdrop' | 'logo';
-type ProxyEnabledTypes = Record<PreviewType, boolean>;
+type PreviewType = 'poster' | 'backdrop' | 'logo' | 'thumbnail';
+type ProxyType = PreviewType;
+type ProxyEnabledTypes = Record<ProxyType, boolean>;
 type SupportedLanguage = {
   code: string;
   label: string;
@@ -49,6 +56,7 @@ type SupportedLanguage = {
 type StreamBadgesSetting = 'auto' | 'on' | 'off';
 type QualityBadgesSide = 'left' | 'right';
 type PosterQualityBadgesPosition = 'auto' | QualityBadgesSide;
+type AiometadataPatternType = 'poster' | 'background' | 'logo' | 'episodeThumbnail';
 
 type HomePageViewState = {
   previewType: PreviewType;
@@ -57,6 +65,7 @@ type HomePageViewState = {
   supportedLanguages: SupportedLanguage[];
   tmdbKey: string;
   mdblistKey: string;
+  simklClientId: string;
   proxyManifestUrl: string;
   proxyEnabledTypes: ProxyEnabledTypes;
   proxyTranslateMeta: boolean;
@@ -66,17 +75,21 @@ type HomePageViewState = {
   posterRatingsLayout: PosterRatingLayout;
   posterRatingsMaxPerSide: number | null;
   backdropRatingsLayout: BackdropRatingLayout;
+  thumbnailRatingsLayout: ThumbnailRatingLayout;
+  thumbnailSize: ThumbnailSize;
   qualityBadgesSide: QualityBadgesSide;
   posterQualityBadgesPosition: PosterQualityBadgesPosition;
   configCopied: boolean;
   proxyCopied: boolean;
   copied: boolean;
+  aiometadataCopiedType: AiometadataPatternType | null;
 };
 
 type HomePageViewDerived = {
   baseUrl: string;
   previewUrl: string;
   proxyUrl: string;
+  previewNotice: string | null;
   canGenerateConfig: boolean;
   canGenerateProxy: boolean;
   isConfigStringVisible: boolean;
@@ -94,6 +107,7 @@ type HomePageViewDerived = {
   qualityBadgeTypeLabel: string;
   activeStreamBadges: StreamBadgesSetting;
   activeQualityBadgesStyle: RatingStyle;
+  aiometadataPatterns: Record<AiometadataPatternType, string>;
 };
 
 type HomePageViewActions = {
@@ -103,14 +117,18 @@ type HomePageViewActions = {
   handleCopyConfig: () => void;
   handleCopyProxy: () => void;
   handleCopyPrompt: () => void;
+  handleCopyAiometadataPattern: (type: AiometadataPatternType) => void;
   setPreviewType: Dispatch<SetStateAction<PreviewType>>;
   setMediaId: Dispatch<SetStateAction<string>>;
   setLang: Dispatch<SetStateAction<string>>;
   setTmdbKey: Dispatch<SetStateAction<string>>;
   setMdblistKey: Dispatch<SetStateAction<string>>;
+  setSimklClientId: Dispatch<SetStateAction<string>>;
   setPosterRatingsLayout: Dispatch<SetStateAction<PosterRatingLayout>>;
   setPosterRatingsMaxPerSide: Dispatch<SetStateAction<number | null>>;
   setBackdropRatingsLayout: Dispatch<SetStateAction<BackdropRatingLayout>>;
+  setThumbnailRatingsLayout: Dispatch<SetStateAction<ThumbnailRatingLayout>>;
+  setThumbnailSize: Dispatch<SetStateAction<ThumbnailSize>>;
   setPosterQualityBadgesPosition: Dispatch<SetStateAction<PosterQualityBadgesPosition>>;
   setQualityBadgesSide: Dispatch<SetStateAction<QualityBadgesSide>>;
   setRatingStyleForType: (value: RatingStyle) => void;
@@ -120,7 +138,7 @@ type HomePageViewActions = {
   toggleRatingPreference: (rating: RatingPreference) => void;
   reorderRatingPreference: (fromIndex: number, toIndex: number) => void;
   updateProxyManifestUrl: (value: string) => void;
-  toggleProxyEnabledType: (type: PreviewType) => void;
+  toggleProxyEnabledType: (type: ProxyType) => void;
   toggleProxyTranslateMeta: () => void;
   toggleConfigStringVisibility: () => void;
   toggleProxyUrlVisibility: () => void;
@@ -135,7 +153,7 @@ export type HomePageViewProps = {
   actions: HomePageViewActions;
 };
 
-const PROXY_TYPES: PreviewType[] = ['poster', 'backdrop', 'logo'];
+const PROXY_TYPES: ProxyType[] = ['poster', 'backdrop', 'logo', 'thumbnail'];
 const STREAM_BADGE_OPTIONS: Array<{ id: StreamBadgesSetting; label: string }> = [
   { id: 'auto', label: 'Auto' },
   { id: 'on', label: 'On' },
@@ -163,6 +181,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
     supportedLanguages,
     tmdbKey,
     mdblistKey,
+    simklClientId,
     proxyManifestUrl,
     proxyEnabledTypes,
     proxyTranslateMeta,
@@ -172,16 +191,20 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     backdropRatingsLayout,
+    thumbnailRatingsLayout,
+    thumbnailSize,
     qualityBadgesSide,
     posterQualityBadgesPosition,
     configCopied,
     proxyCopied,
     copied,
+    aiometadataCopiedType,
   } = state;
   const {
     baseUrl,
     previewUrl,
     proxyUrl,
+    previewNotice,
     canGenerateConfig,
     canGenerateProxy,
     isConfigStringVisible,
@@ -199,6 +222,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
     qualityBadgeTypeLabel,
     activeStreamBadges,
     activeQualityBadgesStyle,
+    aiometadataPatterns,
   } = derived;
   const {
     handleAnchorClick,
@@ -207,14 +231,18 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
     handleCopyConfig,
     handleCopyProxy,
     handleCopyPrompt,
+    handleCopyAiometadataPattern,
     setPreviewType,
     setMediaId,
     setLang,
     setTmdbKey,
     setMdblistKey,
+    setSimklClientId,
     setPosterRatingsLayout,
     setPosterRatingsMaxPerSide,
     setBackdropRatingsLayout,
+    setThumbnailRatingsLayout,
+    setThumbnailSize,
     setPosterQualityBadgesPosition,
     setQualityBadgesSide,
     setRatingStyleForType,
@@ -276,7 +304,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                 </span>
               </h1>
               <p className="text-lg text-slate-400 leading-relaxed max-w-xl">
-                Generate expressive posters, backdrops, and logos for addons in real time.
+                Generate expressive posters, backdrops, logos, and thumbnails for addons in real time.
                 Pass parameters once and ship beautiful media metadata anywhere.
               </p>
               <div className="flex flex-wrap items-center gap-3">
@@ -329,7 +357,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                 <div className="mt-3 space-y-2 text-sm text-slate-300">
                   <div>Config string ready for sharing.</div>
                   <div>Translation pipeline for meta content.</div>
-                  <div>Works with posters, backdrops, logos.</div>
+                  <div>Works with posters, backdrops, logos, thumbnails.</div>
                 </div>
               </div>
             </div>
@@ -406,7 +434,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                 </div>
                 <div>
                   <div className="text-[11px] font-semibold text-slate-400 mb-2">Access Keys</div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     <div>
                       <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">TMDB</label>
                       <input type="password" value={tmdbKey} onChange={(e) => setTmdbKey(e.target.value)} placeholder="v3 Key" className="w-full bg-[#080b10] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-white focus:border-orange-500/50 outline-none" />
@@ -414,6 +442,10 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                     <div>
                       <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">MDBList</label>
                       <input type="password" value={mdblistKey} onChange={(e) => setMdblistKey(e.target.value)} placeholder="Key" className="w-full bg-[#080b10] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-white focus:border-orange-500/50 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">SIMKL</label>
+                      <input type="password" value={simklClientId} onChange={(e) => setSimklClientId(e.target.value)} placeholder="client_id (optional)" className="w-full bg-[#080b10] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-white focus:border-orange-500/50 outline-none" />
                     </div>
                   </div>
                 </div>
@@ -424,11 +456,12 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                     <div>
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">Type</span>
                       <div className="flex gap-1 p-1 bg-[#0b0f15] rounded-lg border border-white/10">
-                        {(['poster', 'backdrop', 'logo'] as const).map(type => (
+                        {(['poster', 'backdrop', 'logo', 'thumbnail'] as const).map(type => (
                           <button key={type} onClick={() => setPreviewType(type)} className={`px-2 py-1.5 rounded text-xs font-medium transition-colors flex items-center gap-1 ${previewType === type ? 'bg-[#141b26] text-white' : 'text-slate-400 hover:text-white'}`}>
                             {type === 'poster' && <ImageIcon className="w-3.5 h-3.5" />}
                             {type === 'backdrop' && <MonitorPlay className="w-3.5 h-3.5" />}
                             {type === 'logo' && <Layers className="w-3.5 h-3.5" />}
+                            {type === 'thumbnail' && <MonitorPlay className="w-3.5 h-3.5" />}
                             {type.charAt(0).toUpperCase() + type.slice(1)}
                           </button>
                         ))}
@@ -436,7 +469,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                     </div>
                     <div className="flex-1 min-w-[140px]">
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">Media ID</span>
-                      <input type="text" value={mediaId} onChange={(e) => setMediaId(e.target.value)} placeholder="tt0133093" className="w-full bg-[#080b10] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-white focus:border-orange-500/50 outline-none" />
+                      <input type="text" value={mediaId} onChange={(e) => setMediaId(e.target.value)} placeholder={previewType === 'thumbnail' ? 'tt0944947:1:1' : 'tt0133093'} className="w-full bg-[#080b10] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-white focus:border-orange-500/50 outline-none" />
                     </div>
                     {tmdbKey ? (
                       <div className="w-32">
@@ -466,7 +499,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                         ))}
                       </div>
                     </div>
-                    {previewType !== 'logo' && (
+                    {previewType !== 'logo' && previewType !== 'thumbnail' && (
                       <div>
                         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">{textLabel}</span>
                         <div className="flex gap-1 p-1 bg-[#0b0f15] rounded-lg border border-white/10">
@@ -479,7 +512,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                   </div>
                 </div>
 
-                {(previewType === 'poster' || previewType === 'backdrop') && (
+                {(previewType === 'poster' || previewType === 'backdrop' || previewType === 'thumbnail') && (
                   <div className="rounded-xl border border-white/10 bg-[#0b0f15]/80 p-3 space-y-3">
                     <div className="text-[11px] font-semibold text-slate-400">Layouts</div>
                     {previewType === 'poster' && (
@@ -514,10 +547,28 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                         </div>
                       </div>
                     )}
+                    {previewType === 'thumbnail' && (
+                      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2.5 space-y-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Thumbnail Layout</div>
+                        <div className="flex flex-wrap gap-1">
+                          {THUMBNAIL_RATING_LAYOUT_OPTIONS.map(opt => (
+                            <button key={opt.id} onClick={() => setThumbnailRatingsLayout(opt.id as ThumbnailRatingLayout)} className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition-colors ${thumbnailRatingsLayout === opt.id ? 'border-orange-500/60 bg-[#141b26] text-white' : 'border-white/10 bg-[#0b0f15] text-slate-400 hover:text-white'}`}>{opt.label}</button>
+                          ))}
+                        </div>
+                        <div className="pt-1">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-2">Thumbnail Size</div>
+                          <div className="flex flex-wrap gap-1">
+                            {THUMBNAIL_SIZE_OPTIONS.map(opt => (
+                              <button key={opt.id} onClick={() => setThumbnailSize(opt.id as ThumbnailSize)} className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition-colors ${thumbnailSize === opt.id ? 'border-orange-500/60 bg-[#141b26] text-white' : 'border-white/10 bg-[#0b0f15] text-slate-400 hover:text-white'}`}>{opt.label}</button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {previewType !== 'logo' && (
+                {previewType !== 'logo' && previewType !== 'thumbnail' && (
                   <div className="rounded-xl border border-white/10 bg-[#0b0f15]/80 p-2.5 space-y-2">
                     <div className="text-[11px] font-semibold text-slate-400">
                       Quality Badges - {qualityBadgeTypeLabel}
@@ -570,16 +621,14 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block">
                     {providersLabel} — drag the grip to reorder (left → right / top → bottom)
                   </span>
-                  {previewType === 'poster' ? (
-                    <span className="block text-[10px] text-slate-500/80">
-                      Order flows top -&gt; bottom, then continues in the right column.
-                    </span>
-                  ) : null}
+                  <span className="block text-[10px] text-slate-500/80">
+                    Order flows top -&gt; bottom, then continues in the right column.
+                  </span>
                   <RatingProviderSortableList
                     rows={ratingProviderRows}
                     onReorder={reorderRatingPreference}
                     onToggle={toggleRatingPreference}
-                    fillDirection={previewType === 'poster' ? 'column' : 'row'}
+                    fillDirection="column"
                   />
                 </div>
               </div>
@@ -593,22 +642,27 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                   All ratings are normalized to a 0-10 scale.
                 </p>
                 <div className="mt-4 rounded-2xl border border-white/10 bg-[#080b10]/90 p-3 min-h-[260px] flex items-center justify-center flex-col">
-
-                  {previewUrl ? (
+                  {previewNotice ? (
+                    <div className="max-w-md text-center">
+                      <div className="text-sm font-semibold text-orange-300">{previewNotice}</div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        Use an episode ID in the format `imdb_id:season:episode`.
+                      </div>
+                    </div>
+                  ) : previewUrl ? (
                     <div className="z-10 w-full flex flex-col items-center gap-8">
                       <div className={`relative shadow-2xl shadow-black ring-1 ring-white/10 rounded-2xl overflow-hidden ${previewType === 'poster'
                         ? 'aspect-[2/3] w-60'
-                        : previewType === 'logo'
-                          ? 'h-40 w-full max-w-lg'
+                          : previewType === 'logo'
+                            ? 'h-40 w-full max-w-lg'
                           : 'aspect-video w-full max-w-lg'
                         }`}>
-                        <Image
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
                           key={previewUrl}
                           src={previewUrl}
                           alt="Preview"
-                          unoptimized
-                          fill
-                          className={previewType === 'logo' ? 'object-contain' : 'object-cover'}
+                          className={`h-full w-full ${previewType === 'logo' ? 'object-contain' : 'object-cover'}`}
                         />
                       </div>
                     </div>
@@ -667,6 +721,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                 )}
 
               </div>
+
             </div>
 
             <div className="min-w-0 w-full flex flex-col h-full gap-3">
@@ -775,13 +830,63 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                     </div>
                     <div className="space-y-1">
                       <div className="text-slate-200 font-semibold">Replace enabled types</div>
-                      <div>Proxy rewrites enabled `meta.poster`, `meta.background`, `meta.logo` for both `catalog` and `meta` responses.</div>
+                      <div>Proxy rewrites enabled `meta.poster`, `meta.background`, `meta.logo`, and `meta.videos[].thumbnail` where available.</div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
+          </div>
+
+          <div className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4 backdrop-blur-xl shadow-[0_25px_70px_-70px_rgba(0,0,0,0.8)]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-lg font-[var(--font-display)] text-white flex items-center gap-2">
+                <Terminal className="w-5 h-5 text-orange-500" /> Aiometadata Patterns
+              </h3>
+            </div>
+            <p className="mt-2 text-sm text-slate-400 max-w-3xl">Copy these URL patterns directly into aiometadata.</p>
+            <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-3">
+              {([
+                ['poster', 'Poster URL Pattern'],
+                ['background', 'Background URL Pattern'],
+                ['logo', 'Logo URL Pattern'],
+                ['episodeThumbnail', 'Episode Thumbnail URL Pattern'],
+              ] as Array<[AiometadataPatternType, string]>).map(([type, label]) => {
+                const value = aiometadataPatterns[type];
+                const isCopied = aiometadataCopiedType === type;
+                const isAvailable = Boolean(value);
+                return (
+                  <div key={type} className="rounded-2xl border border-white/10 bg-[#080b10]/90 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-[11px] font-semibold text-slate-400">{label}</div>
+                      <button
+                        onClick={() => handleCopyAiometadataPattern(type)}
+                        disabled={!isAvailable}
+                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 transition-all ${isAvailable ? (isCopied ? 'bg-green-500 text-white' : 'bg-orange-500 text-black hover:bg-orange-400') : 'bg-[#141b26] text-slate-500 cursor-not-allowed'}`}
+                      >
+                        {isCopied ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>COPIED</span>
+                          </>
+                        ) : (
+                          <>
+                            <Clipboard className="w-3.5 h-3.5" />
+                            <span>COPY</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div className="mt-2 rounded-xl border border-white/10 bg-[#0b0f15]/80 p-3 min-h-28">
+                      <div className="font-mono text-xs text-slate-300 break-all whitespace-pre-wrap">
+                        {value || 'Not available.'}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </section>
 
@@ -829,7 +934,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                     <tbody className="divide-y divide-white/5">
                       <tr>
                         <td className="px-5 py-2 font-mono text-orange-400 text-xs">type <span className="text-slate-500">(path)</span></td>
-                        <td className="px-5 py-2 text-slate-400 text-xs">poster, backdrop, logo</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">poster, backdrop, logo, thumbnail</td>
                         <td className="px-5 py-2 text-slate-500 text-xs">-</td>
                       </tr>
                       <tr>
@@ -839,22 +944,22 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                       </tr>
                       <tr>
                         <td className="px-5 py-2 font-mono text-orange-400 text-xs">ratings</td>
-                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb, mdblist, imdb, tomatoes, letterboxd, metacritic, trakt, myanimelist, anilist, kitsu (global fallback)</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb, mdblist, imdb, tomatoes, letterboxd, metacritic, trakt, simkl, myanimelist, anilist, kitsu (global fallback)</td>
                         <td className="px-5 py-2 text-slate-500 text-xs">all</td>
                       </tr>
                       <tr>
                         <td className="px-5 py-2 font-mono text-orange-400 text-xs">posterRatings</td>
-                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb, mdblist, imdb, tomatoes, letterboxd, metacritic, trakt, myanimelist, anilist, kitsu (poster only)</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb, mdblist, imdb, tomatoes, letterboxd, metacritic, trakt, simkl, myanimelist, anilist, kitsu (poster only)</td>
                         <td className="px-5 py-2 text-slate-500 text-xs">all</td>
                       </tr>
                       <tr>
                         <td className="px-5 py-2 font-mono text-orange-400 text-xs">backdropRatings</td>
-                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb, mdblist, imdb, tomatoes, letterboxd, metacritic, trakt, myanimelist, anilist, kitsu (backdrop only)</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb, mdblist, imdb, tomatoes, letterboxd, metacritic, trakt, simkl, myanimelist, anilist, kitsu (backdrop only)</td>
                         <td className="px-5 py-2 text-slate-500 text-xs">all</td>
                       </tr>
                       <tr>
                         <td className="px-5 py-2 font-mono text-orange-400 text-xs">logoRatings</td>
-                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb, mdblist, imdb, tomatoes, letterboxd, metacritic, trakt, myanimelist, anilist, kitsu (logo only)</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb, mdblist, imdb, tomatoes, letterboxd, metacritic, trakt, simkl, myanimelist, anilist, kitsu (logo only)</td>
                         <td className="px-5 py-2 text-slate-500 text-xs">all</td>
                       </tr>
                       <tr>
@@ -928,6 +1033,16 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                         <td className="px-5 py-2 text-slate-500 text-xs">center</td>
                       </tr>
                       <tr>
+                        <td className="px-5 py-2 font-mono text-orange-400 text-xs">thumbnailRatingsLayout</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">center, center-top, center-bottom, center-vertical, left/right variants, vertical variants</td>
+                        <td className="px-5 py-2 text-slate-500 text-xs">center</td>
+                      </tr>
+                      <tr>
+                        <td className="px-5 py-2 font-mono text-orange-400 text-xs">thumbnailSize</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">small, medium, large</td>
+                        <td className="px-5 py-2 text-slate-500 text-xs">medium</td>
+                      </tr>
+                      <tr>
                         <td className="px-5 py-2 font-mono text-orange-400 text-xs">tmdbKey <span className="font-bold">(req)</span></td>
                         <td className="px-5 py-2 text-slate-400 text-xs">TMDB v3 API Key</td>
                         <td className="px-5 py-2 text-slate-500 text-xs">-</td>
@@ -991,6 +1106,22 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                         </td>
                       </tr>
                       <tr>
+                        <td className="px-5 py-2 font-mono text-orange-400 text-xs">thumbnail</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">
+                          <div className="space-y-1">
+                            <div>thumbnailRatingsLayout</div>
+                            <div>thumbnailSize</div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">
+                          <div className="space-y-1">
+                            <div>thumbnail-specific layout options</div>
+                            <div>small, medium, large</div>
+                            <div>Uses episode stills and episode TMDB/IMDb ratings</div>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr>
                         <td className="px-5 py-2 font-mono text-orange-400 text-xs">logo</td>
                         <td className="px-5 py-2 text-slate-400 text-xs">none (base params only)</td>
                         <td className="px-5 py-2 text-slate-400 text-xs">-</td>
@@ -999,7 +1130,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                   </table>
                 </div>
                 <div className="px-5 pb-5 pt-3 text-[11px] text-slate-500">
-                  Base params for all types: ratings (global fallback), lang, ratingStyle, tmdbKey, mdblistKey. Use posterRatings/backdropRatings/logoRatings to override per type.
+                  Base params for all types: ratings (global fallback), lang, ratingStyle, tmdbKey, mdblistKey, simklClientId. Use posterRatings/backdropRatings/logoRatings to override per type.
                 </div>
               </div>
 
@@ -1026,8 +1157,8 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                       </tr>
                       <tr>
                         <td className="px-5 py-2 font-bold text-slate-300 text-xs">TMDB</td>
-                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb:id or tmdb:movie:id or tmdb:tv:id</td>
-                        <td className="px-5 py-2 font-mono text-orange-200/50 text-xs">tmdb:movie:603, tmdb:tv:1399</td>
+                        <td className="px-5 py-2 text-slate-400 text-xs">tmdb:id or tmdb:movie:id or tmdb:tv:id or tmdb:series:id</td>
+                        <td className="px-5 py-2 font-mono text-orange-200/50 text-xs">tmdb:movie:603, tmdb:tv:1399, tmdb:series:1399</td>
                       </tr>
                       <tr>
                         <td className="px-5 py-2 font-bold text-slate-300 text-xs">Kitsu</td>
@@ -1073,6 +1204,8 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                     <span className="text-orange-400 font-bold">tmdbKey</span>=<span className="text-slate-400 font-bold">{'{tmdbKey}'}</span>
                     <span className="text-white">&</span>
                     <span className="text-orange-400 font-bold">mdblistKey</span>=<span className="text-slate-400 font-bold">{'{mdbKey}'}</span>
+                    <span className="text-white">&</span>
+                    <span className="text-orange-400 font-bold">simklClientId</span>=<span className="text-slate-400 font-bold">{'{simklClientId}'}</span>
                   </div>
                   <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
                     <div className="flex gap-2">
@@ -1090,6 +1223,10 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                     <div className="flex gap-2">
                       <span className="text-orange-500 font-bold shrink-0">mdblistKey (required):</span>
                       <span className="text-slate-400">Your MDBList API Key.</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <span className="text-orange-500 font-bold shrink-0">simklClientId (optional):</span>
+                      <span className="text-slate-400">Required only if you want direct SIMKL ratings.</span>
                     </div>
                   </div>
                 </div>
@@ -1142,17 +1279,17 @@ Parameter               | Values                                                
 type (path)             | poster, backdrop, logo                                               | -
 id (path)               | IMDb (tt...), TMDB (tmdb:id / tmdb:movie:id / tmdb:tv:id), Kitsu (kitsu:id), AniList, MAL          | -
 ratings                 | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, rogerebert, myanimelist,          |
-                        | anilist, kitsu (global fallback)                                     |
+                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
+                        | myanimelist, anilist, kitsu (global fallback)                       |
 posterRatings           | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, rogerebert, myanimelist,          |
-                        | anilist, kitsu (poster only)                                         |
+                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
+                        | myanimelist, anilist, kitsu (poster only)                           |
 backdropRatings         | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, rogerebert, myanimelist,          |
-                        | anilist, kitsu (backdrop only)                                       |
+                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
+                        | myanimelist, anilist, kitsu (backdrop only)                         |
 logoRatings             | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, rogerebert, myanimelist,          |
-                        | anilist, kitsu (logo only)                                           |
+                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
+                        | myanimelist, anilist, kitsu (logo only)                             |
 lang                    | Any TMDB ISO 639-1 code (en, it, fr, es, de, ja, ko, etc.)            | en
 streamBadges            | auto, on, off (global fallback)                                      | auto
 posterStreamBadges      | auto, on, off (poster only)                                          | auto
@@ -1167,30 +1304,35 @@ imageText               | original, clean, alternative                          
 posterRatingsLayout     | top, bottom, left, right, top-bottom, left-right                     | top-bottom
 posterRatingsMaxPerSide | Number (1-20)                                                        | auto
 backdropRatingsLayout   | center, right, right-vertical                                        | center
+thumbnailRatingsLayout  | center + thumbnail-only side/top/bottom/vertical variants            | center
+thumbnailSize           | small, medium, large                                                 | medium
 tmdbKey (REQUIRED)      | Your TMDB v3 API Key                                                 | -
 mdblistKey (REQUIRED)   | Your MDBList.com API Key                                             | -
+simklClientId (OPTIONAL)| Your SIMKL client_id for direct SIMKL ratings                        | -
 
 TMDB NOTE: Always prefer tmdb:movie:id or tmdb:tv:id. Using bare tmdb:id can collide between movie and tv.
 
 --- INTEGRATION REQUIREMENTS ---
 1. Use ONLY the "erdbConfig" field (no modal and no extra settings panels).
-2. Add toggles to enable/disable: poster, backdrop, logo.
+2. Add toggles to enable/disable: poster, backdrop, logo, thumbnail.
 3. If a type is disabled, keep the original artwork (do not call ERDB for that type).
 4. Build ERDB URLs using the decoded config and inject them into both catalog and meta responses.
 
 --- PER-TYPE SETTINGS ---
 poster   -> ratingStyle = cfg.posterRatingStyle, imageText = cfg.posterImageText
 backdrop -> ratingStyle = cfg.backdropRatingStyle, imageText = cfg.backdropImageText
+thumbnail -> ratingStyle = cfg.backdropRatingStyle, thumbnailRatingsLayout = cfg.thumbnailRatingsLayout, thumbnailSize = cfg.thumbnailSize
 logo     -> ratingStyle = cfg.logoRatingStyle (omit imageText)
-Ratings providers can be set per-type via cfg.posterRatings / cfg.backdropRatings / cfg.logoRatings (fallback to cfg.ratings).
+Ratings providers can be set per-type via cfg.posterRatings / cfg.backdropRatings / cfg.logoRatings (fallback to cfg.ratings). Thumbnail ratings are episode-level and currently support TMDB + IMDb only.
 Quality badges style can be set per-type via cfg.posterQualityBadgesStyle / cfg.backdropQualityBadgesStyle (fallback to cfg.qualityBadgesStyle).
 
 --- URL BUILD ---
 const typeRatingStyle = type === 'poster' ? cfg.posterRatingStyle : type === 'backdrop' ? cfg.backdropRatingStyle : cfg.logoRatingStyle;
 const typeImageText = type === 'backdrop' ? cfg.backdropImageText : cfg.posterImageText;
-\${cfg.baseUrl}/\${type}/\${id}.jpg?tmdbKey=\${cfg.tmdbKey}&mdblistKey=\${cfg.mdblistKey}&ratings=\${cfg.ratings}&posterRatings=\${cfg.posterRatings}&backdropRatings=\${cfg.backdropRatings}&logoRatings=\${cfg.logoRatings}&lang=\${cfg.lang}&streamBadges=\${cfg.streamBadges}&posterStreamBadges=\${cfg.posterStreamBadges}&backdropStreamBadges=\${cfg.backdropStreamBadges}&qualityBadgesSide=\${cfg.qualityBadgesSide}&posterQualityBadgesPosition=\${cfg.posterQualityBadgesPosition}&qualityBadgesStyle=\${cfg.qualityBadgesStyle}&posterQualityBadgesStyle=\${cfg.posterQualityBadgesStyle}&backdropQualityBadgesStyle=\${cfg.backdropQualityBadgesStyle}&ratingStyle=\${typeRatingStyle}&imageText=\${typeImageText}&posterRatingsLayout=\${cfg.posterRatingsLayout}&posterRatingsMaxPerSide=\${cfg.posterRatingsMaxPerSide}&backdropRatingsLayout=\${cfg.backdropRatingsLayout}
+\${cfg.baseUrl}/\${type}/\${id}.jpg?tmdbKey=\${cfg.tmdbKey}&mdblistKey=\${cfg.mdblistKey}&simklClientId=\${cfg.simklClientId}&ratings=\${cfg.ratings}&posterRatings=\${cfg.posterRatings}&backdropRatings=\${cfg.backdropRatings}&logoRatings=\${cfg.logoRatings}&lang=\${cfg.lang}&streamBadges=\${cfg.streamBadges}&posterStreamBadges=\${cfg.posterStreamBadges}&backdropStreamBadges=\${cfg.backdropStreamBadges}&qualityBadgesSide=\${cfg.qualityBadgesSide}&posterQualityBadgesPosition=\${cfg.posterQualityBadgesPosition}&qualityBadgesStyle=\${cfg.qualityBadgesStyle}&posterQualityBadgesStyle=\${cfg.posterQualityBadgesStyle}&backdropQualityBadgesStyle=\${cfg.backdropQualityBadgesStyle}&ratingStyle=\${typeRatingStyle}&imageText=\${typeImageText}&posterRatingsLayout=\${cfg.posterRatingsLayout}&posterRatingsMaxPerSide=\${cfg.posterRatingsMaxPerSide}&backdropRatingsLayout=\${cfg.backdropRatingsLayout}
 
-Omit imageText when type=logo.
+For thumbnails use thumbnailRatingsLayout and thumbnailSize instead of imageText.
+Omit imageText when type=logo or type=thumbnail.
 
 Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRatings/logoRatings to disable providers.`}</div>
                 </div>

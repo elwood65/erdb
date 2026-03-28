@@ -28,6 +28,16 @@ import {
   type BackdropRatingLayout,
 } from '@/lib/backdropRatingLayout';
 import {
+  THUMBNAIL_RATING_LAYOUT_OPTIONS,
+  DEFAULT_THUMBNAIL_RATING_LAYOUT,
+  type ThumbnailRatingLayout,
+} from '@/lib/thumbnailRatingLayout';
+import {
+  THUMBNAIL_SIZE_OPTIONS,
+  DEFAULT_THUMBNAIL_SIZE,
+  type ThumbnailSize,
+} from '@/lib/thumbnailSize';
+import {
   DEFAULT_POSTER_RATINGS_MAX_PER_SIDE,
   DEFAULT_POSTER_RATING_LAYOUT,
   POSTER_RATING_LAYOUT_OPTIONS,
@@ -53,9 +63,14 @@ const SUPPORTED_LANGUAGES = [
   { code: 'tr', label: 'T\u00fcrk\u00e7e', flag: '\uD83C\uDDF9\uD83C\uDDF7' },
 ];
 const VISIBLE_RATING_PROVIDER_OPTIONS = RATING_PROVIDER_OPTIONS;
-const PROXY_TYPES = ['poster', 'backdrop', 'logo'] as const;
+const THUMBNAIL_SUPPORTED_RATINGS: RatingPreference[] = ['tmdb', 'imdb'];
+const EPISODE_ID_PATTERN = /^.+:\d+:\d+$/;
+const PROXY_TYPES = ['poster', 'backdrop', 'logo', 'thumbnail'] as const;
+const PREVIEW_TYPES = ['poster', 'backdrop', 'logo', 'thumbnail'] as const;
 type ProxyType = (typeof PROXY_TYPES)[number];
+type PreviewType = (typeof PREVIEW_TYPES)[number];
 type ProxyEnabledTypes = Record<ProxyType, boolean>;
+type AiometadataPatternType = 'poster' | 'background' | 'logo' | 'episodeThumbnail';
 type StreamBadgesSetting = 'auto' | 'on' | 'off';
 type QualityBadgesSide = 'left' | 'right';
 type PosterQualityBadgesPosition = 'auto' | QualityBadgesSide;
@@ -79,11 +94,14 @@ const POSTER_QUALITY_BADGE_POSITION_OPTIONS: Array<{
 ];
 const TMDB_KEY_STORAGE_KEY = 'erdb_tmdb_key';
 const MDBLIST_KEY_STORAGE_KEY = 'erdb_mdblist_key';
+const SIMKL_CLIENT_ID_STORAGE_KEY = 'erdb_simkl_client_id';
 const EXPORT_CONFIG_VERSION = 1;
 const RATING_PROVIDER_IDS = new Set(RATING_PROVIDER_OPTIONS.map((option) => option.id));
 const isRatingProviderId = (value: string): value is RatingPreference =>
   RATING_PROVIDER_IDS.has(value as RatingPreference);
 
+const isPreviewType = (value: unknown): value is PreviewType =>
+  PREVIEW_TYPES.includes(value as PreviewType);
 const isProxyType = (value: unknown): value is ProxyType =>
   PROXY_TYPES.includes(value as ProxyType);
 const isStreamBadgesSetting = (value: unknown): value is StreamBadgesSetting =>
@@ -100,6 +118,8 @@ const isPosterRatingLayout = (value: unknown): value is PosterRatingLayout =>
   POSTER_RATING_LAYOUT_OPTIONS.some((option) => option.id === value);
 const isBackdropRatingLayout = (value: unknown): value is BackdropRatingLayout =>
   BACKDROP_RATING_LAYOUT_OPTIONS.some((option) => option.id === value);
+const isThumbnailRatingLayout = (value: unknown): value is ThumbnailRatingLayout =>
+  THUMBNAIL_RATING_LAYOUT_OPTIONS.some((option) => option.id === value);
 
 const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
 
@@ -174,6 +194,236 @@ const decodeBase64Url = (value: string) => {
   return new TextDecoder().decode(bytes);
 };
 
+const buildAiometadataPattern = (options: {
+  baseUrl: string;
+  imageType: 'poster' | 'backdrop' | 'logo' | 'thumbnail';
+  idPlaceholder: string;
+  tmdbKey: string;
+  mdblistKey: string;
+  simklClientId: string;
+  lang: string;
+  posterRatings: string;
+  backdropRatings: string;
+  logoRatings: string;
+  posterStreamBadges: StreamBadgesSetting;
+  backdropStreamBadges: StreamBadgesSetting;
+  shouldShowPosterQualityBadgesSide: boolean;
+  shouldShowPosterQualityBadgesPosition: boolean;
+  qualityBadgesSide: QualityBadgesSide;
+  posterQualityBadgesPosition: PosterQualityBadgesPosition;
+  posterQualityBadgesStyle: RatingStyle;
+  backdropQualityBadgesStyle: RatingStyle;
+  posterRatingStyle: RatingStyle;
+  backdropRatingStyle: RatingStyle;
+  logoRatingStyle: RatingStyle;
+  posterImageText: 'original' | 'clean' | 'alternative';
+  backdropImageText: 'original' | 'clean' | 'alternative';
+  posterRatingsLayout: PosterRatingLayout;
+  posterRatingsMaxPerSide: number | null;
+  backdropRatingsLayout: BackdropRatingLayout;
+  thumbnailRatingsLayout: ThumbnailRatingLayout;
+  thumbnailSize: ThumbnailSize;
+}) => {
+  const {
+    baseUrl,
+    imageType,
+    idPlaceholder,
+    tmdbKey,
+    mdblistKey,
+    simklClientId,
+    lang,
+    posterRatings,
+    backdropRatings,
+    logoRatings,
+    posterStreamBadges,
+    backdropStreamBadges,
+    shouldShowPosterQualityBadgesSide,
+    shouldShowPosterQualityBadgesPosition,
+    qualityBadgesSide,
+    posterQualityBadgesPosition,
+    posterQualityBadgesStyle,
+    backdropQualityBadgesStyle,
+    posterRatingStyle,
+    backdropRatingStyle,
+    logoRatingStyle,
+    posterImageText,
+    backdropImageText,
+    posterRatingsLayout,
+    posterRatingsMaxPerSide,
+    backdropRatingsLayout,
+    thumbnailRatingsLayout,
+    thumbnailSize,
+  } = options;
+
+  if (!baseUrl || !tmdbKey || !mdblistKey) {
+    return '';
+  }
+
+  const params: Array<[string, string]> = [
+    ['tmdbKey', tmdbKey || '{tmdb_key}'],
+    ['mdblistKey', mdblistKey || '{mdblist_key}'],
+    ['lang', '{language_short}'],
+  ];
+
+  if (simklClientId) {
+    params.push(['simklClientId', simklClientId]);
+  }
+
+  if (imageType === 'poster') {
+    params.push(['posterRatings', posterRatings]);
+    if (posterStreamBadges !== 'auto') {
+      params.push(['posterStreamBadges', posterStreamBadges]);
+    }
+    if (shouldShowPosterQualityBadgesSide && qualityBadgesSide !== 'left') {
+      params.push(['qualityBadgesSide', qualityBadgesSide]);
+    }
+    if (shouldShowPosterQualityBadgesPosition && posterQualityBadgesPosition !== 'auto') {
+      params.push(['posterQualityBadgesPosition', posterQualityBadgesPosition]);
+    }
+    if (posterQualityBadgesStyle !== DEFAULT_QUALITY_BADGES_STYLE) {
+      params.push(['posterQualityBadgesStyle', posterQualityBadgesStyle]);
+    }
+    params.push(['ratingStyle', posterRatingStyle]);
+    params.push(['imageText', posterImageText]);
+    params.push(['posterRatingsLayout', posterRatingsLayout]);
+    if (isVerticalPosterRatingLayout(posterRatingsLayout) && posterRatingsMaxPerSide !== null) {
+      params.push(['posterRatingsMaxPerSide', String(posterRatingsMaxPerSide)]);
+    }
+  } else if (imageType === 'backdrop') {
+    params.push(['backdropRatings', backdropRatings]);
+    if (backdropStreamBadges !== 'auto') {
+      params.push(['backdropStreamBadges', backdropStreamBadges]);
+    }
+    if (backdropQualityBadgesStyle !== DEFAULT_QUALITY_BADGES_STYLE) {
+      params.push(['backdropQualityBadgesStyle', backdropQualityBadgesStyle]);
+    }
+    params.push(['ratingStyle', backdropRatingStyle]);
+    params.push(['imageText', backdropImageText]);
+    params.push(['backdropRatingsLayout', backdropRatingsLayout]);
+  } else if (imageType === 'thumbnail') {
+    params.push(['backdropRatings', backdropRatings]);
+    params.push(['ratingStyle', backdropRatingStyle]);
+    params.push(['thumbnailRatingsLayout', thumbnailRatingsLayout]);
+    params.push(['thumbnailSize', thumbnailSize]);
+  } else {
+    params.push(['logoRatings', logoRatings]);
+    params.push(['ratingStyle', logoRatingStyle]);
+  }
+
+  const query = params
+    .filter(([, value]) => value !== '')
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+
+  return `${baseUrl}/${imageType}/${idPlaceholder}.jpg?${query}`;
+};
+
+const buildAiometadataPatternBlock = (options: {
+  baseUrl: string;
+  imageType: 'poster' | 'backdrop' | 'logo' | 'thumbnail';
+  configString: string;
+}) => {
+  if (!options.baseUrl || !options.configString) {
+    return '';
+  }
+
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(decodeBase64Url(options.configString)) as Record<string, unknown>;
+  } catch {
+    return '';
+  }
+
+  const params: Array<[string, string]> = [];
+  const THUMBNAIL_SUPPORTED_RATINGS = new Set(['tmdb', 'imdb']);
+
+  const pushIfString = (key: string) => {
+    const value = config[key];
+    if (typeof value === 'string' && value !== '') {
+      params.push([key, value]);
+    }
+  };
+
+  const filterThumbnailRatings = (value: unknown) => {
+    if (typeof value !== 'string' || value === '') return '';
+    return value
+      .split(',')
+      .map((provider) => provider.trim().toLowerCase())
+      .filter((provider, index, providers) => {
+        return THUMBNAIL_SUPPORTED_RATINGS.has(provider) && providers.indexOf(provider) === index;
+      })
+      .join(',');
+  };
+
+  pushIfString('tmdbKey');
+  pushIfString('lang');
+
+  if (options.imageType !== 'thumbnail') {
+    pushIfString('mdblistKey');
+    pushIfString('simklClientId');
+    pushIfString('ratings');
+    pushIfString('qualityBadgesSide');
+    pushIfString('posterQualityBadgesPosition');
+    pushIfString('qualityBadgesStyle');
+    pushIfString('posterQualityBadgesStyle');
+    pushIfString('backdropQualityBadgesStyle');
+    pushIfString('streamBadges');
+    pushIfString('posterStreamBadges');
+    pushIfString('backdropStreamBadges');
+  }
+
+  if (options.imageType === 'poster') {
+    pushIfString('posterRatings');
+    if (typeof config.posterRatingStyle === 'string' && config.posterRatingStyle !== '') {
+      params.push(['ratingStyle', config.posterRatingStyle]);
+    }
+    if (typeof config.posterImageText === 'string' && config.posterImageText !== '') {
+      params.push(['imageText', config.posterImageText]);
+    }
+    pushIfString('posterRatingsLayout');
+    if (
+      typeof config.posterRatingsMaxPerSide === 'string' ||
+      typeof config.posterRatingsMaxPerSide === 'number'
+    ) {
+      params.push(['posterRatingsMaxPerSide', String(config.posterRatingsMaxPerSide)]);
+    }
+  } else if (options.imageType === 'backdrop' || options.imageType === 'thumbnail') {
+    if (typeof config.backdropRatingStyle === 'string' && config.backdropRatingStyle !== '') {
+      params.push(['ratingStyle', config.backdropRatingStyle]);
+    }
+    if (options.imageType !== 'thumbnail' && typeof config.backdropImageText === 'string' && config.backdropImageText !== '') {
+      params.push(['imageText', config.backdropImageText]);
+    }
+    pushIfString(options.imageType === 'thumbnail' ? 'thumbnailRatingsLayout' : 'backdropRatingsLayout');
+    if (options.imageType === 'thumbnail') {
+      const thumbnailRatings = filterThumbnailRatings(config.backdropRatings ?? config.ratings);
+      if (thumbnailRatings) {
+        params.push(['ratings', thumbnailRatings]);
+      }
+      pushIfString('thumbnailSize');
+    } else {
+      pushIfString('backdropRatings');
+    }
+  } else {
+    pushIfString('logoRatings');
+    if (typeof config.logoRatingStyle === 'string' && config.logoRatingStyle !== '') {
+      params.push(['ratingStyle', config.logoRatingStyle]);
+    }
+  }
+
+  const query = params
+    .filter(([, value]) => value !== '')
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+
+  const idPattern =
+    options.imageType === 'thumbnail'
+      ? '{imdb_id}:{season}:{episode}'
+      : '{imdb_id}';
+  const basePattern = `${options.baseUrl}/${options.imageType}/${idPattern}.jpg`;
+  return query ? `${basePattern}?${query}` : basePattern;
+};
+
 const downloadJsonFile = (payload: Record<string, unknown>, filename: string) => {
   if (typeof window === 'undefined') return;
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -188,7 +438,7 @@ const downloadJsonFile = (payload: Record<string, unknown>, filename: string) =>
 const maskSensitiveText = (value: string) => value.replace(/[^\s]/g, '*');
 
 export default function Home() {
-  const [previewType, setPreviewType] = useState<'poster' | 'backdrop' | 'logo'>('poster');
+  const [previewType, setPreviewType] = useState<PreviewType>('poster');
   const [mediaId, setMediaId] = useState('tt0133093');
   const [lang, setLang] = useState('en');
   const [posterImageText, setPosterImageText] = useState<'original' | 'clean' | 'alternative'>('clean');
@@ -209,6 +459,8 @@ export default function Home() {
   const [backdropQualityBadgesStyle, setBackdropQualityBadgesStyle] = useState<RatingStyle>(DEFAULT_QUALITY_BADGES_STYLE);
   const [posterRatingsLayout, setPosterRatingsLayout] = useState<PosterRatingLayout>('bottom');
   const [backdropRatingsLayout, setBackdropRatingsLayout] = useState<BackdropRatingLayout>(DEFAULT_BACKDROP_RATING_LAYOUT);
+  const [thumbnailRatingsLayout, setThumbnailRatingsLayout] = useState<ThumbnailRatingLayout>(DEFAULT_THUMBNAIL_RATING_LAYOUT);
+  const [thumbnailSize, setThumbnailSize] = useState<ThumbnailSize>(DEFAULT_THUMBNAIL_SIZE);
   const [posterRatingStyle, setPosterRatingStyle] = useState<RatingStyle>(DEFAULT_RATING_STYLE);
   const [backdropRatingStyle, setBackdropRatingStyle] = useState<RatingStyle>(DEFAULT_RATING_STYLE);
   const [logoRatingStyle, setLogoRatingStyle] = useState<RatingStyle>('plain');
@@ -216,17 +468,20 @@ export default function Home() {
   const [supportedLanguages, setSupportedLanguages] = useState(SUPPORTED_LANGUAGES);
   const [mdblistKey, setMdblistKey] = useState('');
   const [tmdbKey, setTmdbKey] = useState('');
+  const [simklClientId, setSimklClientId] = useState('');
   const [proxyManifestUrl, setProxyManifestUrl] = useState('');
   const [proxyEnabledTypes, setProxyEnabledTypes] = useState<ProxyEnabledTypes>({
     poster: true,
     backdrop: true,
     logo: true,
+    thumbnail: true,
   });
   const [proxyTranslateMeta, setProxyTranslateMeta] = useState(false);
   const [proxyCopied, setProxyCopied] = useState(false);
   const [configCopied, setConfigCopied] = useState(false);
   const [showConfigString, setShowConfigString] = useState(false);
   const [showProxyUrl, setShowProxyUrl] = useState(false);
+  const [aiometadataCopiedType, setAiometadataCopiedType] = useState<AiometadataPatternType | null>(null);
   const [exportStatus, setExportStatus] = useState<'idle' | 'with' | 'without'>('idle');
   const [importStatus, setImportStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [importMessage, setImportMessage] = useState('');
@@ -240,19 +495,28 @@ export default function Home() {
   const shouldShowQualityBadgesSide = previewType === 'poster' && shouldShowPosterQualityBadgesSide;
   const shouldShowQualityBadgesPosition =
     previewType === 'poster' && shouldShowPosterQualityBadgesPosition;
-  const qualityBadgeTypeLabel = previewType === 'backdrop' ? 'Backdrop' : 'Poster';
-  const activeStreamBadges = previewType === 'backdrop' ? backdropStreamBadges : posterStreamBadges;
-  const setActiveStreamBadges = previewType === 'backdrop' ? setBackdropStreamBadges : setPosterStreamBadges;
+  const qualityBadgeTypeLabel = previewType === 'backdrop' || previewType === 'thumbnail' ? 'Backdrop' : 'Poster';
+  const activeStreamBadges =
+    previewType === 'backdrop' || previewType === 'thumbnail' ? backdropStreamBadges : posterStreamBadges;
+  const setActiveStreamBadges =
+    previewType === 'backdrop' || previewType === 'thumbnail'
+      ? setBackdropStreamBadges
+      : setPosterStreamBadges;
   const activeQualityBadgesStyle =
-    previewType === 'backdrop' ? backdropQualityBadgesStyle : posterQualityBadgesStyle;
+    previewType === 'backdrop' || previewType === 'thumbnail'
+      ? backdropQualityBadgesStyle
+      : posterQualityBadgesStyle;
   const setActiveQualityBadgesStyle =
-    previewType === 'backdrop' ? setBackdropQualityBadgesStyle : setPosterQualityBadgesStyle;
+    previewType === 'backdrop' || previewType === 'thumbnail'
+      ? setBackdropQualityBadgesStyle
+      : setPosterQualityBadgesStyle;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const storedTmdbKey = safeLocalStorageGet(TMDB_KEY_STORAGE_KEY);
     const storedMdblistKey = safeLocalStorageGet(MDBLIST_KEY_STORAGE_KEY);
-    if (!storedTmdbKey && !storedMdblistKey) {
+    const storedSimklClientId = safeLocalStorageGet(SIMKL_CLIENT_ID_STORAGE_KEY);
+    if (!storedTmdbKey && !storedMdblistKey && !storedSimklClientId) {
       return;
     }
     const frameId = window.requestAnimationFrame(() => {
@@ -261,6 +525,9 @@ export default function Home() {
       }
       if (storedMdblistKey) {
         setMdblistKey(storedMdblistKey);
+      }
+      if (storedSimklClientId) {
+        setSimklClientId(storedSimklClientId);
       }
     });
     return () => window.cancelAnimationFrame(frameId);
@@ -281,6 +548,14 @@ export default function Home() {
       safeLocalStorageRemove(MDBLIST_KEY_STORAGE_KEY);
     }
   }, [mdblistKey]);
+
+  useEffect(() => {
+    if (simklClientId) {
+      safeLocalStorageSet(SIMKL_CLIENT_ID_STORAGE_KEY, simklClientId);
+    } else {
+      safeLocalStorageRemove(SIMKL_CLIENT_ID_STORAGE_KEY);
+    }
+  }, [simklClientId]);
 
   const scrollToHash = useCallback((hash: string, behavior: ScrollBehavior = 'smooth') => {
     if (typeof window === 'undefined') return;
@@ -348,20 +623,20 @@ Node/JS: const cfg = JSON.parse(Buffer.from(erdbConfig, 'base64url').toString('u
 Endpoint: GET /{type}/{id}.jpg?...queryParams
 
 Parameter               | Values                                                              | Default
-type (path)             | poster, backdrop, logo                                               | -
+type (path)             | poster, backdrop, logo, thumbnail                                    | -
 id (path)               | IMDb (tt...), TMDB (tmdb:id / tmdb:movie:id / tmdb:tv:id), Kitsu (kitsu:id), AniList, MAL          | -
 ratings                 | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, rogerebert, myanimelist,          |
-                        | anilist, kitsu (global fallback)                                     |
+                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
+                        | myanimelist, anilist, kitsu (global fallback)                       |
 posterRatings           | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, rogerebert, myanimelist,          |
-                        | anilist, kitsu (poster only)                                         |
+                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
+                        | myanimelist, anilist, kitsu (poster only)                           |
 backdropRatings         | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, rogerebert, myanimelist,          |
-                        | anilist, kitsu (backdrop only)                                       |
+                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
+                        | myanimelist, anilist, kitsu (backdrop only)                         |
 logoRatings             | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, rogerebert, myanimelist,          |
-                        | anilist, kitsu (logo only)                                           |
+                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
+                        | myanimelist, anilist, kitsu (logo only)                             |
 lang                    | Any TMDB ISO 639-1 code (en, it, fr, es, de, ja, ko, etc.)            | en
 streamBadges            | auto, on, off (global fallback)                                      | auto
 posterStreamBadges      | auto, on, off (poster only)                                          | auto
@@ -376,28 +651,33 @@ imageText               | original, clean, alternative                          
 posterRatingsLayout     | top, bottom, left, right, top-bottom, left-right                     | top-bottom
 posterRatingsMaxPerSide | Number (1-20)                                                        | auto
 backdropRatingsLayout   | center, right, right-vertical                                        | center
+thumbnailRatingsLayout  | center, center-top, center-bottom, center-vertical, center-top-vertical, center-bottom-vertical, left, left-top, left-bottom, left-vertical, left-top-vertical, left-bottom-vertical, right, right-top, right-bottom, right-vertical, right-top-vertical, right-bottom-vertical | center
+thumbnailSize           | small, medium, large                                                 | medium
 tmdbKey (REQUIRED)      | Your TMDB v3 API Key                                                 | -
 mdblistKey (REQUIRED)   | Your MDBList.com API Key                                             | -
+simklClientId (OPTIONAL)| Your SIMKL client_id for direct SIMKL ratings                        | -
 
 --- INTEGRATION REQUIREMENTS ---
 1. Use ONLY the \"erdbConfig\" field (no modal and no extra settings panels).
-2. Add toggles to enable/disable: poster, backdrop, logo.
+2. Add toggles to enable/disable: poster, backdrop, logo, thumbnail.
 3. If a type is disabled, keep the original artwork (do not call ERDB for that type).
 4. Build ERDB URLs using the decoded config and inject them into both catalog and meta responses.
 
 --- PER-TYPE SETTINGS ---
 poster   -> ratingStyle = cfg.posterRatingStyle, imageText = cfg.posterImageText
 backdrop -> ratingStyle = cfg.backdropRatingStyle, imageText = cfg.backdropImageText
+thumbnail -> ratingStyle = cfg.backdropRatingStyle, thumbnailRatingsLayout = cfg.thumbnailRatingsLayout, thumbnailSize = cfg.thumbnailSize, ratings = TMDB/IMDb episode ratings only
 logo     -> ratingStyle = cfg.logoRatingStyle (omit imageText)
-Ratings providers can be set per-type via cfg.posterRatings / cfg.backdropRatings / cfg.logoRatings (fallback to cfg.ratings).
+Ratings providers can be set per-type via cfg.posterRatings / cfg.backdropRatings / cfg.logoRatings (fallback to cfg.ratings). Thumbnail ratings are episode-level and currently support TMDB + IMDb only.
 Quality badges style can be set per-type via cfg.posterQualityBadgesStyle / cfg.backdropQualityBadgesStyle (fallback to cfg.qualityBadgesStyle).
 
 --- URL BUILD ---
 const typeRatingStyle = type === 'poster' ? cfg.posterRatingStyle : type === 'backdrop' ? cfg.backdropRatingStyle : cfg.logoRatingStyle;
 const typeImageText = type === 'backdrop' ? cfg.backdropImageText : cfg.posterImageText;
-\${cfg.baseUrl}/\${type}/\${id}.jpg?tmdbKey=\${cfg.tmdbKey}&mdblistKey=\${cfg.mdblistKey}&ratings=\${cfg.ratings}&posterRatings=\${cfg.posterRatings}&backdropRatings=\${cfg.backdropRatings}&logoRatings=\${cfg.logoRatings}&lang=\${cfg.lang}&streamBadges=\${cfg.streamBadges}&posterStreamBadges=\${cfg.posterStreamBadges}&backdropStreamBadges=\${cfg.backdropStreamBadges}&qualityBadgesSide=\${cfg.qualityBadgesSide}&posterQualityBadgesPosition=\${cfg.posterQualityBadgesPosition}&qualityBadgesStyle=\${cfg.qualityBadgesStyle}&posterQualityBadgesStyle=\${cfg.posterQualityBadgesStyle}&backdropQualityBadgesStyle=\${cfg.backdropQualityBadgesStyle}&ratingStyle=\${typeRatingStyle}&imageText=\${typeImageText}&posterRatingsLayout=\${cfg.posterRatingsLayout}&posterRatingsMaxPerSide=\${cfg.posterRatingsMaxPerSide}&backdropRatingsLayout=\${cfg.backdropRatingsLayout}
+\${cfg.baseUrl}/\${type}/\${id}.jpg?tmdbKey=\${cfg.tmdbKey}&mdblistKey=\${cfg.mdblistKey}&simklClientId=\${cfg.simklClientId}&ratings=\${cfg.ratings}&posterRatings=\${cfg.posterRatings}&backdropRatings=\${cfg.backdropRatings}&logoRatings=\${cfg.logoRatings}&lang=\${cfg.lang}&streamBadges=\${cfg.streamBadges}&posterStreamBadges=\${cfg.posterStreamBadges}&backdropStreamBadges=\${cfg.backdropStreamBadges}&qualityBadgesSide=\${cfg.qualityBadgesSide}&posterQualityBadgesPosition=\${cfg.posterQualityBadgesPosition}&qualityBadgesStyle=\${cfg.qualityBadgesStyle}&posterQualityBadgesStyle=\${cfg.posterQualityBadgesStyle}&backdropQualityBadgesStyle=\${cfg.backdropQualityBadgesStyle}&ratingStyle=\${typeRatingStyle}&imageText=\${typeImageText}&posterRatingsLayout=\${cfg.posterRatingsLayout}&posterRatingsMaxPerSide=\${cfg.posterRatingsMaxPerSide}&backdropRatingsLayout=\${cfg.backdropRatingsLayout}
 
-Omit imageText when type=logo.
+For thumbnails use thumbnailRatingsLayout and thumbnailSize instead of imageText.
+Omit imageText when type=logo or type=thumbnail.
 
 Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRatings/logoRatings to disable providers.`;
 
@@ -410,33 +690,42 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     const ratingPreferencesForType =
       previewType === 'poster'
         ? posterRatingPreferences
-        : previewType === 'backdrop'
+        : previewType === 'backdrop' || previewType === 'thumbnail'
           ? backdropRatingPreferences
           : logoRatingPreferences;
     const ratingsQuery = stringifyRatingPreferencesAllowEmpty(ratingPreferencesForType);
     const ratingStyleForType =
       previewType === 'poster'
         ? posterRatingStyle
-        : previewType === 'backdrop'
+        : previewType === 'backdrop' || previewType === 'thumbnail'
           ? backdropRatingStyle
           : logoRatingStyle;
-    const imageTextForType = previewType === 'backdrop' ? backdropImageText : posterImageText;
-    const streamBadgesForType = previewType === 'backdrop' ? backdropStreamBadges : posterStreamBadges;
+    const imageTextForType =
+      previewType === 'backdrop' || previewType === 'thumbnail' ? backdropImageText : posterImageText;
+    const streamBadgesForType =
+      previewType === 'backdrop' || previewType === 'thumbnail' ? backdropStreamBadges : posterStreamBadges;
     const qualityBadgesStyleForType =
-      previewType === 'backdrop' ? backdropQualityBadgesStyle : posterQualityBadgesStyle;
+      previewType === 'backdrop' || previewType === 'thumbnail'
+        ? backdropQualityBadgesStyle
+        : posterQualityBadgesStyle;
     const query = new URLSearchParams({
       ratingStyle: ratingStyleForType,
       lang,
     });
     if (previewType === 'poster') {
       query.set('posterRatings', ratingsQuery);
-    } else if (previewType === 'backdrop') {
+    } else if (previewType === 'backdrop' || previewType === 'thumbnail') {
       query.set('backdropRatings', ratingsQuery);
     } else {
       query.set('logoRatings', ratingsQuery);
     }
-    if (previewType !== 'logo' && streamBadgesForType !== 'auto') {
-      query.set(previewType === 'backdrop' ? 'backdropStreamBadges' : 'posterStreamBadges', streamBadgesForType);
+    if (previewType !== 'logo' && previewType !== 'thumbnail' && streamBadgesForType !== 'auto') {
+      query.set(
+        previewType === 'backdrop'
+          ? 'backdropStreamBadges'
+          : 'posterStreamBadges',
+        streamBadgesForType
+      );
     }
     if (shouldShowQualityBadgesSide && qualityBadgesSide !== 'left') {
       query.set('qualityBadgesSide', qualityBadgesSide);
@@ -444,15 +733,20 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     if (shouldShowQualityBadgesPosition && posterQualityBadgesPosition !== 'auto') {
       query.set('posterQualityBadgesPosition', posterQualityBadgesPosition);
     }
-    if (previewType !== 'logo' && qualityBadgesStyleForType !== DEFAULT_QUALITY_BADGES_STYLE) {
+    if (previewType !== 'logo' && previewType !== 'thumbnail' && qualityBadgesStyleForType !== DEFAULT_QUALITY_BADGES_STYLE) {
       query.set(
-        previewType === 'backdrop' ? 'backdropQualityBadgesStyle' : 'posterQualityBadgesStyle',
+        previewType === 'backdrop'
+          ? 'backdropQualityBadgesStyle'
+          : 'posterQualityBadgesStyle',
         qualityBadgesStyleForType
       );
     }
 
     if (mdblistKey) {
       query.set('mdblistKey', mdblistKey);
+    }
+    if (simklClientId) {
+      query.set('simklClientId', simklClientId);
     }
     if (tmdbKey) {
       query.set('tmdbKey', tmdbKey);
@@ -466,8 +760,15 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       if (isVerticalPosterRatingLayout(posterRatingsLayout) && posterRatingsMaxPerSide !== null) {
         query.set('posterRatingsMaxPerSide', String(posterRatingsMaxPerSide));
       }
-    } else if (previewType === 'backdrop') {
-      query.set('backdropRatingsLayout', backdropRatingsLayout);
+    } else if (previewType === 'backdrop' || previewType === 'thumbnail') {
+      query.set(
+        previewType === 'thumbnail' ? 'thumbnailRatingsLayout' : 'backdropRatingsLayout',
+        previewType === 'thumbnail' ? thumbnailRatingsLayout : backdropRatingsLayout
+      );
+      if (previewType === 'thumbnail') {
+        query.set('thumbnailSize', thumbnailSize);
+        query.set('previewVariant', `${thumbnailSize}-${thumbnailRatingsLayout}`);
+      }
     }
 
     if (!baseUrl) {
@@ -490,6 +791,8 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     backdropRatingsLayout,
+    thumbnailRatingsLayout,
+    thumbnailSize,
     qualityBadgesSide,
     posterQualityBadgesPosition,
     posterQualityBadgesStyle,
@@ -499,12 +802,14 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     logoRatingStyle,
     baseUrl,
     mdblistKey,
+    simklClientId,
     tmdbKey,
   ]);
 
   const configString = useMemo(() => {
     const tmdb = tmdbKey.trim();
     const mdb = mdblistKey.trim();
+    const simkl = simklClientId.trim();
     if (!baseUrl || !tmdb || !mdb) {
       return '';
     }
@@ -514,6 +819,9 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       tmdbKey: tmdb,
       mdblistKey: mdb,
     };
+    if (simkl) {
+      config.simklClientId = simkl;
+    }
 
     const posterRatingsQuery = stringifyRatingPreferencesAllowEmpty(posterRatingPreferences);
     const backdropRatingsQuery = stringifyRatingPreferencesAllowEmpty(backdropRatingPreferences);
@@ -572,12 +880,19 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     if (backdropRatingsLayout) {
       config.backdropRatingsLayout = backdropRatingsLayout;
     }
+    if (thumbnailRatingsLayout) {
+      config.thumbnailRatingsLayout = thumbnailRatingsLayout;
+    }
+    if (thumbnailSize) {
+      config.thumbnailSize = thumbnailSize;
+    }
 
     return encodeBase64Url(JSON.stringify(config));
   }, [
     baseUrl,
     tmdbKey,
     mdblistKey,
+    simklClientId,
     posterRatingPreferences,
     backdropRatingPreferences,
     logoRatingPreferences,
@@ -598,6 +913,8 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     backdropRatingsLayout,
+    thumbnailRatingsLayout,
+    thumbnailSize,
   ]);
 
   const proxyUrl = useMemo(() => {
@@ -607,6 +924,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     const manifestUrl = normalizeManifestUrl(proxyManifestUrl);
     const tmdb = tmdbKey.trim();
     const mdb = mdblistKey.trim();
+    const simkl = simklClientId.trim();
     if (!manifestUrl || isBareHttpUrl(manifestUrl) || !tmdb || !mdb) {
       return '';
     }
@@ -616,6 +934,9 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       tmdbKey: tmdb,
       mdblistKey: mdb,
     };
+    if (simkl) {
+      config.simklClientId = simkl;
+    }
 
     const proxyPosterRatingsQuery = stringifyRatingPreferencesAllowEmpty(posterRatingPreferences);
     const proxyBackdropRatingsQuery = stringifyRatingPreferencesAllowEmpty(backdropRatingPreferences);
@@ -659,6 +980,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     config.posterEnabled = proxyEnabledTypes.poster;
     config.backdropEnabled = proxyEnabledTypes.backdrop;
     config.logoEnabled = proxyEnabledTypes.logo;
+    config.thumbnailEnabled = proxyEnabledTypes.thumbnail;
     if (proxyTranslateMeta) {
       config.translateMeta = true;
     }
@@ -672,6 +994,12 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     if (backdropRatingsLayout) {
       config.backdropRatingsLayout = backdropRatingsLayout;
     }
+    if (thumbnailRatingsLayout) {
+      config.thumbnailRatingsLayout = thumbnailRatingsLayout;
+    }
+    if (thumbnailSize) {
+      config.thumbnailSize = thumbnailSize;
+    }
 
     config.erdbBase = baseUrl;
     const encoded = encodeBase64Url(JSON.stringify(config));
@@ -680,6 +1008,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     proxyManifestUrl,
     tmdbKey,
     mdblistKey,
+    simklClientId,
     posterRatingPreferences,
     backdropRatingPreferences,
     logoRatingPreferences,
@@ -700,21 +1029,62 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     backdropRatingsLayout,
+    thumbnailRatingsLayout,
+    thumbnailSize,
     proxyEnabledTypes,
     proxyTranslateMeta,
     baseUrl,
   ]);
 
+  const aiometadataPatterns = useMemo(() => {
+    return {
+      poster: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'poster',
+        configString,
+      }),
+      background: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'backdrop',
+        configString,
+      }),
+      logo: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'logo',
+        configString,
+      }),
+      episodeThumbnail: buildAiometadataPatternBlock({
+        baseUrl,
+        imageType: 'thumbnail',
+        configString,
+      }),
+    };
+  }, [
+    baseUrl,
+    configString,
+  ]);
+
   const updateRatingRowsForType = (
-    type: 'poster' | 'backdrop' | 'logo',
+    type: PreviewType,
     updater: (current: RatingProviderRow[]) => RatingProviderRow[]
   ) => {
     if (type === 'poster') {
       setPosterRatingRows(updater);
       return;
     }
-    if (type === 'backdrop') {
-      setBackdropRatingRows(updater);
+    if (type === 'backdrop' || type === 'thumbnail') {
+      setBackdropRatingRows((current) => {
+        const next = updater(current);
+        if (type !== 'thumbnail') {
+          return next;
+        }
+
+        const supportedSet = new Set<RatingPreference>(THUMBNAIL_SUPPORTED_RATINGS);
+        return next.map((row) => ({
+          ...row,
+          enabled: supportedSet.has(row.id) ? row.enabled : false,
+        }));
+      });
       return;
     }
     setLogoRatingRows(updater);
@@ -737,6 +1107,28 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       ) {
         return rows;
       }
+      if (previewType === 'thumbnail') {
+        const supportedSet = new Set<RatingPreference>(THUMBNAIL_SUPPORTED_RATINGS);
+        const thumbnailRows = rows.filter((row) => supportedSet.has(row.id));
+        if (fromIndex >= thumbnailRows.length || toIndex >= thumbnailRows.length) {
+          return rows;
+        }
+
+        const reorderedThumbnailRows = [...thumbnailRows];
+        const [item] = reorderedThumbnailRows.splice(fromIndex, 1);
+        reorderedThumbnailRows.splice(toIndex, 0, item);
+
+        let thumbnailCursor = 0;
+        return rows.map((row) => {
+          if (!supportedSet.has(row.id)) {
+            return row;
+          }
+          const nextRow = reorderedThumbnailRows[thumbnailCursor];
+          thumbnailCursor += 1;
+          return nextRow;
+        });
+      }
+
       const copy = [...rows];
       const [item] = copy.splice(fromIndex, 1);
       copy.splice(toIndex, 0, item);
@@ -765,6 +1157,14 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     setTimeout(() => setProxyCopied(false), 2000);
   }, [proxyUrl]);
 
+  const handleCopyAiometadataPattern = useCallback((type: AiometadataPatternType) => {
+    const value = aiometadataPatterns[type];
+    if (!value) return;
+    navigator.clipboard.writeText(value);
+    setAiometadataCopiedType(type);
+    setTimeout(() => setAiometadataCopiedType((current) => (current === type ? null : current)), 2000);
+  }, [aiometadataPatterns]);
+
   const handleExportConfig = (includeKeys: boolean) => {
     const payload: Record<string, unknown> = {
       version: EXPORT_CONFIG_VERSION,
@@ -789,6 +1189,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       posterRatingsLayout,
       posterRatingsMaxPerSide,
       backdropRatingsLayout,
+      thumbnailRatingsLayout,
       proxyManifestUrl,
       proxyEnabledTypes,
       translateMeta: proxyTranslateMeta,
@@ -797,6 +1198,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     if (includeKeys) {
       payload.tmdbKey = tmdbKey;
       payload.mdblistKey = mdblistKey;
+      payload.simklClientId = simklClientId;
     }
 
     const filename = includeKeys ? 'erdb-config-with-keys.json' : 'erdb-config.json';
@@ -812,13 +1214,16 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     if (typeof payload.mdblistKey === 'string') {
       setMdblistKey(payload.mdblistKey);
     }
+    if (typeof payload.simklClientId === 'string') {
+      setSimklClientId(payload.simklClientId);
+    }
     if (typeof payload.mediaId === 'string') {
       setMediaId(payload.mediaId);
     }
     if (typeof payload.lang === 'string') {
       setLang(payload.lang);
     }
-    if (typeof payload.previewType === 'string' && isProxyType(payload.previewType)) {
+    if (typeof payload.previewType === 'string' && isPreviewType(payload.previewType)) {
       setPreviewType(payload.previewType);
     }
     if (typeof payload.posterImageText === 'string' && isImageText(payload.posterImageText)) {
@@ -862,6 +1267,12 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
     }
     if (typeof payload.backdropRatingsLayout === 'string' && isBackdropRatingLayout(payload.backdropRatingsLayout)) {
       setBackdropRatingsLayout(payload.backdropRatingsLayout);
+    }
+    if (typeof payload.thumbnailRatingsLayout === 'string' && isThumbnailRatingLayout(payload.thumbnailRatingsLayout)) {
+      setThumbnailRatingsLayout(payload.thumbnailRatingsLayout);
+    }
+    if (typeof payload.thumbnailSize === 'string' && THUMBNAIL_SIZE_OPTIONS.some((option) => option.id === payload.thumbnailSize)) {
+      setThumbnailSize(payload.thumbnailSize as ThumbnailSize);
     }
 
     if (payload.posterRatingsMaxPerSide === null) {
@@ -922,6 +1333,7 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
         poster: typeof enabled.poster === 'boolean' ? enabled.poster : current.poster,
         backdrop: typeof enabled.backdrop === 'boolean' ? enabled.backdrop : current.backdrop,
         logo: typeof enabled.logo === 'boolean' ? enabled.logo : current.logo,
+        thumbnail: typeof enabled.thumbnail === 'boolean' ? enabled.thumbnail : current.thumbnail,
       }));
     }
     if (typeof payload.translateMeta === 'boolean') {
@@ -978,36 +1390,50 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
   const activeRatingStyle =
     previewType === 'poster'
       ? posterRatingStyle
-      : previewType === 'backdrop'
+      : previewType === 'backdrop' || previewType === 'thumbnail'
         ? backdropRatingStyle
         : logoRatingStyle;
-  const activeImageText = previewType === 'backdrop' ? backdropImageText : posterImageText;
+  const activeImageText =
+    previewType === 'backdrop' || previewType === 'thumbnail' ? backdropImageText : posterImageText;
   const styleLabel =
     previewType === 'poster'
       ? 'Poster Ratings Style'
       : previewType === 'backdrop'
         ? 'Backdrop Ratings Style'
+        : previewType === 'thumbnail'
+          ? 'Thumbnail Ratings Style'
         : 'Logo Ratings Style';
-  const textLabel = previewType === 'backdrop' ? 'Backdrop Text' : 'Poster Text';
+  const textLabel =
+    previewType === 'backdrop' ? 'Backdrop Text' : previewType === 'thumbnail' ? 'Thumbnail Text' : 'Poster Text';
   const providersLabel =
     previewType === 'poster'
       ? 'Poster Providers'
       : previewType === 'backdrop'
         ? 'Backdrop Providers'
+        : previewType === 'thumbnail'
+          ? 'Thumbnail Providers'
         : 'Logo Providers';
   const ratingProviderRows =
     previewType === 'poster'
       ? posterRatingRows
-      : previewType === 'backdrop'
+      : previewType === 'backdrop' || previewType === 'thumbnail'
         ? backdropRatingRows
         : logoRatingRows;
+  const visibleRatingProviderRows =
+    previewType === 'thumbnail'
+      ? ratingProviderRows.filter((row) => THUMBNAIL_SUPPORTED_RATINGS.includes(row.id))
+      : ratingProviderRows;
+  const previewNotice =
+    previewType === 'thumbnail' && !EPISODE_ID_PATTERN.test(mediaId.trim())
+      ? 'Movies are not supported for thumbnails.'
+      : null;
 
   const setRatingStyleForType = (value: RatingStyle) => {
     if (previewType === 'poster') {
       setPosterRatingStyle(value);
       return;
     }
-    if (previewType === 'backdrop') {
+    if (previewType === 'backdrop' || previewType === 'thumbnail') {
       setBackdropRatingStyle(value);
       return;
     }
@@ -1015,24 +1441,24 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
   };
 
   const setImageTextForType = (value: 'original' | 'clean' | 'alternative') => {
-    if (previewType === 'backdrop') {
+    if (previewType === 'backdrop' || previewType === 'thumbnail') {
       setBackdropImageText(value);
       return;
     }
     setPosterImageText(value);
   };
-
   const viewProps: HomePageViewProps = {
     refs: {
       navRef,
     },
-    state: {
+      state: {
       previewType,
       mediaId,
       lang,
       supportedLanguages,
-      tmdbKey,
-      mdblistKey,
+        tmdbKey,
+        mdblistKey,
+        simklClientId,
       proxyManifestUrl,
       proxyEnabledTypes,
       proxyTranslateMeta,
@@ -1042,17 +1468,21 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       posterRatingsLayout,
       posterRatingsMaxPerSide,
       backdropRatingsLayout,
+      thumbnailRatingsLayout,
+      thumbnailSize,
       qualityBadgesSide,
       posterQualityBadgesPosition,
       configCopied,
       proxyCopied,
       copied,
+      aiometadataCopiedType,
     },
     derived: {
       baseUrl,
-      previewUrl,
-      proxyUrl,
-      canGenerateConfig,
+    previewUrl,
+    proxyUrl,
+      previewNotice,
+    canGenerateConfig,
       canGenerateProxy,
       isConfigStringVisible,
       isProxyUrlVisible,
@@ -1063,12 +1493,13 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       providersLabel,
       activeRatingStyle,
       activeImageText,
-      ratingProviderRows,
+      ratingProviderRows: visibleRatingProviderRows,
       shouldShowQualityBadgesPosition,
       shouldShowQualityBadgesSide,
       qualityBadgeTypeLabel,
       activeStreamBadges,
       activeQualityBadgesStyle,
+      aiometadataPatterns,
     },
     actions: {
       handleAnchorClick,
@@ -1077,14 +1508,18 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
       handleCopyConfig,
       handleCopyProxy,
       handleCopyPrompt,
+      handleCopyAiometadataPattern,
       setPreviewType,
       setMediaId,
       setLang,
-      setTmdbKey,
-      setMdblistKey,
+        setTmdbKey,
+        setMdblistKey,
+        setSimklClientId,
       setPosterRatingsLayout,
       setPosterRatingsMaxPerSide,
       setBackdropRatingsLayout,
+      setThumbnailRatingsLayout,
+      setThumbnailSize,
       setPosterQualityBadgesPosition,
       setQualityBadgesSide,
       setRatingStyleForType,
