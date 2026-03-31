@@ -469,7 +469,6 @@ const DEFAULT_QUALITY_BADGES_STYLE: RatingStyle = 'glass';
 const LOGO_BASE_HEIGHT = 320;
 const LOGO_FALLBACK_ASPECT_RATIO = 2.5;
 const LOGO_MIN_WIDTH = 360;
-const LOGO_MAX_WIDTH = 2200;
 
 const buildProviderMonogram = (label: string) => {
   const cleaned = label.replace(/[^A-Za-z0-9]+/g, ' ').trim();
@@ -2095,10 +2094,8 @@ const writeProviderIconToStorage = async (
 };
 
 const pickTmdbImageSize = (imageType: RenderImageType, outputWidth: number) => {
-  if (imageType === 'poster') return 'w500';
-  if (imageType === 'backdrop' || imageType === 'thumbnail') return 'w1280';
-  if (imageType === 'logo') {
-    return outputWidth <= 500 ? 'w500' : 'original';
+  if (imageType === 'poster' || imageType === 'backdrop' || imageType === 'thumbnail' || imageType === 'logo') {
+    return 'original';
   }
   return 'original';
 };
@@ -2323,10 +2320,7 @@ const estimateGeneratedLogoLineWidth = (line: string, fontSize: number) =>
 const buildGeneratedLogoDataUrl = (title: string) => {
   const lines = splitTitleForGeneratedLogo(title);
   const maxLineLength = Math.max(...lines.map((line) => line.length), 1);
-  const width = Math.max(
-    760,
-    Math.min(LOGO_MAX_WIDTH, Math.round(maxLineLength * 68 + 280))
-  );
+  const width = Math.max(760, Math.round(maxLineLength * 68 + 280));
   const height = LOGO_BASE_HEIGHT;
   const aspectRatio = width / height;
   const baseFontSize = lines.length === 1 ? 172 : lines.length === 2 ? 136 : lines.length === 3 ? 108 : 86;
@@ -6150,10 +6144,7 @@ export async function GET(
         outputHeight = LOGO_BASE_HEIGHT;
         outputWidth = Math.max(
           LOGO_MIN_WIDTH,
-          Math.min(
-            LOGO_MAX_WIDTH,
-            Math.round(LOGO_BASE_HEIGHT * (rawFallbackLogoAspectRatio || LOGO_FALLBACK_ASPECT_RATIO))
-          )
+          Math.round(LOGO_BASE_HEIGHT * (rawFallbackLogoAspectRatio || LOGO_FALLBACK_ASPECT_RATIO))
         );
       }
 
@@ -6402,7 +6393,7 @@ export async function GET(
         if (selectedLogoAspectRatio) {
           outputWidth = Math.max(
             LOGO_MIN_WIDTH,
-            Math.min(LOGO_MAX_WIDTH, Math.round(LOGO_BASE_HEIGHT * selectedLogoAspectRatio))
+            Math.round(LOGO_BASE_HEIGHT * selectedLogoAspectRatio)
           );
         }
 
@@ -6431,7 +6422,7 @@ export async function GET(
               if (selectedLogoAspectRatio) {
                 outputWidth = Math.max(
                   LOGO_MIN_WIDTH,
-                  Math.min(LOGO_MAX_WIDTH, Math.round(LOGO_BASE_HEIGHT * selectedLogoAspectRatio))
+                  Math.round(LOGO_BASE_HEIGHT * selectedLogoAspectRatio)
                 );
               }
             }
