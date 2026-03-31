@@ -621,7 +621,7 @@ export function HomePageView({ refs, state, derived, actions }: HomePageViewProp
                           <select value={lang} onChange={(e) => setLang(e.target.value)} className="w-full bg-[#080b10] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-white appearance-none outline-none focus:border-orange-500/50">
                             {supportedLanguages.map((language) => (
                               <option key={language.code} value={language.code} className="bg-[#0b0f15]">
-                                {language.flag} {language.label} [{language.code}]
+                                {language.flag} {language.label}
                               </option>
                             ))}
                           </select>

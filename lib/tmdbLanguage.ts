@@ -17,6 +17,14 @@ const toLanguageLabel = (value?: string | null) => {
   return trimmed || null;
 };
 
+const toTitleCaseLabel = (value: string, locale?: string | null) => {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+
+  const [firstChar, ...restChars] = [...trimmed];
+  return `${firstChar.toLocaleUpperCase(locale || undefined)}${restChars.join('')}`;
+};
+
 export const normalizeTmdbLanguageCode = (value?: string | null) => {
   if (!value) return null;
 
@@ -46,6 +54,35 @@ export const getTmdbLanguageBase = (value?: string | null) => {
   return normalized.split('-')[0] || null;
 };
 
+const getTmdbLanguageRegion = (value?: string | null) => {
+  const normalized = normalizeTmdbLanguageCode(value);
+  if (!normalized) return null;
+
+  const parts = normalized.split('-').slice(1);
+  return (
+    parts.find((part) => /^[A-Z]{2}$/.test(part) || /^\d{3}$/.test(part)) ||
+    null
+  );
+};
+
+const getRegionDisplayName = (regionCode: string, localeCandidates: Array<string | null>) => {
+  const locales = [...new Set(localeCandidates.filter((locale): locale is string => Boolean(locale)))];
+
+  for (const locale of locales) {
+    try {
+      const displayNames = new Intl.DisplayNames([locale], { type: 'region' });
+      const name = displayNames.of(regionCode);
+      if (name && name !== regionCode) {
+        return name;
+      }
+    } catch {
+      // Ignore unsupported locale/display name combinations and keep trying fallbacks.
+    }
+  }
+
+  return null;
+};
+
 export const buildSupportedLanguageList = (options?: {
   languages?: TmdbConfigurationLanguage[];
   primaryTranslations?: string[];
@@ -58,7 +95,10 @@ export const buildSupportedLanguageList = (options?: {
       continue;
     }
 
-    const preferredLabel = toLanguageLabel(language.name) || toLanguageLabel(language.english_name) || baseCode;
+    const preferredLabel =
+      toLanguageLabel(language.name) ||
+      toLanguageLabel(language.english_name) ||
+      baseCode;
     baseLabels.set(baseCode, preferredLabel);
   }
 
@@ -87,9 +127,15 @@ export const buildSupportedLanguageList = (options?: {
       continue;
     }
 
+    const baseLabel = toTitleCaseLabel(baseLabels.get(baseCode) || normalizedCode, baseCode);
+    const regionCode = getTmdbLanguageRegion(normalizedCode);
+    const regionLabel = regionCode
+      ? getRegionDisplayName(regionCode, [normalizedCode, baseCode, 'en'])
+      : null;
+
     supportedLanguages.set(normalizedCode, {
       code: normalizedCode,
-      label: baseLabels.get(baseCode) || normalizedCode,
+      label: regionLabel ? `${baseLabel} (${regionLabel})` : baseLabel,
       flag: LANGUAGE_ICON,
     });
   }
