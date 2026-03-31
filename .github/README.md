@@ -2,6 +2,13 @@
 
 ERDB generates poster/backdrop/logo/thumbnail images with dynamic ratings on-the-fly.
 
+[![Release](https://img.shields.io/github/v/release/realbestia1/erdb?display_name=tag&sort=semver&style=for-the-badge)](https://github.com/realbestia1/erdb/releases)
+[![Website](https://img.shields.io/badge/Website-easyratingsdb.com-0F766E?style=for-the-badge&logo=googlechrome&logoColor=white)](https://easyratingsdb.com/)
+[![GHCR](https://img.shields.io/badge/GHCR-ghcr.io%2Frealbestia1%2Ferdb-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://github.com/realbestia1/erdb/pkgs/container/erdb)
+[![License](https://img.shields.io/github/license/realbestia1/erdb?style=for-the-badge)](https://github.com/realbestia1/erdb/blob/main/LICENSE)
+
+[![Support on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/realbestia)
+
 ## Quick Start
 
 ## Install From GitHub
@@ -121,6 +128,7 @@ Main endpoint:
 
 ### Examples
 - **Poster with IMDb and TMDB**: `/poster/tt0133093.jpg?ratings=imdb,tmdb&lang=it`
+- **Spain Spanish poster**: `/poster/tt7798634.jpg?ratings=imdb,tmdb&lang=es-ES`
 - **Minimal backdrop**: `/backdrop/tmdb:603.jpg?ratings=mdblist&style=plain`
 
 ### Supported Query Parameters
@@ -129,7 +137,7 @@ Main endpoint:
 |-----------|-------------|------------------|---------|
 | `type` | Image type (Path) | `poster`, `backdrop`, `logo`, `thumbnail` | - |
 | `id` | Media ID (Path) | IMDb (tt...), TMDB (tmdb:..., tmdb:movie:..., tmdb:tv:..., tmdb:series:...), Kitsu (kitsu:...) | - |
-| `lang` | Image language | Any TMDB ISO 639-1 code (e.g. `it`, `en`, `es`, `fr`, `de`, `ru`, `ja`) | `en` |
+| `lang` | TMDB language code | Any TMDB language code (e.g. `it`, `en`, `es-ES`, `es-MX`, `pt-PT`, `pt-BR`) | `en` |
 | `streamBadges` | Quality badges via Torrentio (global fallback) | `auto`, `on`, `off` | `auto` |
 | `posterStreamBadges` | Poster quality badges | `auto`, `on`, `off` | `auto` |
 | `backdropStreamBadges` | Backdrop quality badges | `auto`, `on`, `off` | `auto` |
@@ -149,8 +157,11 @@ Main endpoint:
 | `imageText` | Image text (poster/backdrop only) | `original`, `clean`, `alternative` | `original` (poster), `clean` (backdrop) |
 | `posterRatingsLayout` | Poster layout | `top`, `bottom`, `left`, `right`, `top-bottom`, `left-right` | `top-bottom` |
 | `posterRatingsMaxPerSide` | Max badges per side | Number (1-20) | `auto` |
-| `backdropRatingsLayout` | Backdrop layout | `center`, `right`, `right-vertical` | `center` |
+| `backdropRatingsLayout` | Backdrop layout | `center`, `right-vertical` | `center` |
 | `thumbnailRatingsLayout` | Thumbnail layout | `center`, `center-top`, `center-bottom`, `center-vertical`, `center-top-vertical`, `center-bottom-vertical`, `left`, `left-top`, `left-bottom`, `left-vertical`, `left-top-vertical`, `left-bottom-vertical`, `right`, `right-top`, `right-bottom`, `right-vertical`, `right-top-vertical`, `right-bottom-vertical` | `center` |
+| `posterVerticalBadgeContent` | Poster vertical badge content | `standard`, `stacked` | `standard` |
+| `backdropVerticalBadgeContent` | Backdrop vertical badge content | `standard`, `stacked` | `standard` |
+| `thumbnailVerticalBadgeContent` | Thumbnail vertical badge content | `standard`, `stacked` | `standard` |
 | `thumbnailSize` | Thumbnail rating badge size | `small`, `medium`, `large` | `medium` |
 
 All rendered ratings are normalized to a `0-10` display scale for `poster`, `backdrop`, and `logo` outputs. Providers that already use `/10` are shown without the suffix, percentage sources are converted to decimal (`69%` -> `6.9`), `/5` sources are doubled (`4.2/5` -> `8.4`), and `/4` sources are multiplied by `2.5`.
@@ -162,7 +173,9 @@ For episodic `thumbnail` renders, episode ratings currently support `TMDB` and `
 ERDB supports multiple formats to identify media:
 
 - **IMDb**: `tt0133093` (standard `tt` + numbers)
+- **Real IMDb**: `realimdb:tt0944947` or `realimdb:tt0388629:2:1` for canonical IMDb episode mapping with TMDb remapping
 - **TMDB**: `tmdb:603`, `tmdb:movie:603`, `tmdb:tv:1399`, `tmdb:series:1399` (`series` is treated as `tv`)
+- **TVDB**: `tvdb:81797:12:1` (`tvdb:{seriesId}:{airedSeason}:{airedEpisode}`)
 - **Kitsu**: `kitsu:1` (prefix `kitsu:` followed by the ID)
 - **Anime Mappings**: `provider:id` (e.g. `anilist:123`, `myanimelist:456`)
 
@@ -212,7 +225,7 @@ backdropRatings         | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, lette
 logoRatings             | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
                         | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
                         | myanimelist, anilist, kitsu (logo only)                             |
-lang                    | Any TMDB ISO 639-1 code (en, it, fr, es, de, ja, ko, etc.)            | en
+lang                    | Any TMDB language code (en, it, es-ES, es-MX, pt-PT, pt-BR, etc.)    | en
 streamBadges            | auto, on, off (global fallback)                                      | auto
 posterStreamBadges      | auto, on, off (poster only)                                          | auto
 backdropStreamBadges    | auto, on, off (backdrop only)                                        | auto
@@ -225,8 +238,11 @@ ratingStyle             | glass, square, plain                                  
 imageText               | original, clean, alternative                                         | original
 posterRatingsLayout     | top, bottom, left, right, top-bottom, left-right                     | top-bottom
 posterRatingsMaxPerSide | Number (1-20)                                                        | auto
-backdropRatingsLayout   | center, right, right-vertical                                        | center
+backdropRatingsLayout   | center, right-vertical                                               | center
 thumbnailRatingsLayout  | center, center-top, center-bottom, center-vertical, center-top-vertical, center-bottom-vertical, left, left-top, left-bottom, left-vertical, left-top-vertical, left-bottom-vertical, right, right-top, right-bottom, right-vertical, right-top-vertical, right-bottom-vertical | center
+posterVerticalBadgeContent   | standard, stacked (poster vertical layouts only)                 | standard
+backdropVerticalBadgeContent | standard, stacked (backdrop vertical layouts only)               | standard
+thumbnailVerticalBadgeContent| standard, stacked (thumbnail vertical layouts only)              | standard
 thumbnailSize           | small, medium, large                                                 | medium
 tmdbKey (REQUIRED)      | Your TMDB v3 API Key                                                 | -
 mdblistKey (REQUIRED)   | Your MDBList.com API Key                                             | -
@@ -243,14 +259,15 @@ poster   -> ratingStyle = cfg.posterRatingStyle, imageText = cfg.posterImageText
 backdrop -> ratingStyle = cfg.backdropRatingStyle, imageText = cfg.backdropImageText
 thumbnail -> ratingStyle = cfg.backdropRatingStyle, thumbnailRatingsLayout = cfg.thumbnailRatingsLayout, thumbnailSize = cfg.thumbnailSize
 logo     -> ratingStyle = cfg.logoRatingStyle (omit imageText)
-Ratings providers can be set per-type via cfg.posterRatings / cfg.backdropRatings / cfg.logoRatings (fallback to cfg.ratings). Thumbnail ratings are episode-level and currently support TMDB + IMDb only.
+Ratings providers can be set per-type via cfg.posterRatings / cfg.backdropRatings / cfg.thumbnailRatings / cfg.logoRatings (fallback to cfg.ratings). Thumbnail ratings are episode-level and currently support TMDB + IMDb only.
 Quality badges can be set per-type via cfg.posterStreamBadges / cfg.backdropStreamBadges (fallback to cfg.streamBadges).
 Quality badges style can be set per-type via cfg.posterQualityBadgesStyle / cfg.backdropQualityBadgesStyle (fallback to cfg.qualityBadgesStyle).
+Use cfg.posterVerticalBadgeContent for poster vertical layouts, cfg.backdropVerticalBadgeContent for backdrop, and cfg.thumbnailVerticalBadgeContent for thumbnail vertical layouts when you want icon and value stacked instead of inline.
 
 --- URL BUILD ---
 const typeRatingStyle = type === 'poster' ? cfg.posterRatingStyle : type === 'backdrop' ? cfg.backdropRatingStyle : cfg.logoRatingStyle;
 const typeImageText = type === 'backdrop' ? cfg.backdropImageText : cfg.posterImageText;
-${cfg.baseUrl}/${type}/${id}.jpg?tmdbKey=${cfg.tmdbKey}&mdblistKey=${cfg.mdblistKey}&simklClientId=${cfg.simklClientId}&ratings=${cfg.ratings}&posterRatings=${cfg.posterRatings}&backdropRatings=${cfg.backdropRatings}&logoRatings=${cfg.logoRatings}&lang=${cfg.lang}&streamBadges=${cfg.streamBadges}&posterStreamBadges=${cfg.posterStreamBadges}&backdropStreamBadges=${cfg.backdropStreamBadges}&qualityBadgesSide=${cfg.qualityBadgesSide}&posterQualityBadgesPosition=${cfg.posterQualityBadgesPosition}&qualityBadgesStyle=${cfg.qualityBadgesStyle}&posterQualityBadgesStyle=${cfg.posterQualityBadgesStyle}&backdropQualityBadgesStyle=${cfg.backdropQualityBadgesStyle}&ratingStyle=${typeRatingStyle}&imageText=${typeImageText}&posterRatingsLayout=${cfg.posterRatingsLayout}&posterRatingsMaxPerSide=${cfg.posterRatingsMaxPerSide}&backdropRatingsLayout=${cfg.backdropRatingsLayout}
+${cfg.baseUrl}/${type}/${id}.jpg?tmdbKey=${cfg.tmdbKey}&mdblistKey=${cfg.mdblistKey}&simklClientId=${cfg.simklClientId}&ratings=${cfg.ratings}&posterRatings=${cfg.posterRatings}&backdropRatings=${cfg.backdropRatings}&thumbnailRatings=${cfg.thumbnailRatings}&logoRatings=${cfg.logoRatings}&lang=${cfg.lang}&streamBadges=${cfg.streamBadges}&posterStreamBadges=${cfg.posterStreamBadges}&backdropStreamBadges=${cfg.backdropStreamBadges}&qualityBadgesSide=${cfg.qualityBadgesSide}&posterQualityBadgesPosition=${cfg.posterQualityBadgesPosition}&qualityBadgesStyle=${cfg.qualityBadgesStyle}&posterQualityBadgesStyle=${cfg.posterQualityBadgesStyle}&backdropQualityBadgesStyle=${cfg.backdropQualityBadgesStyle}&ratingStyle=${typeRatingStyle}&imageText=${typeImageText}&posterRatingsLayout=${cfg.posterRatingsLayout}&posterRatingsMaxPerSide=${cfg.posterRatingsMaxPerSide}&backdropRatingsLayout=${cfg.backdropRatingsLayout}&posterVerticalBadgeContent=${cfg.posterVerticalBadgeContent}&backdropVerticalBadgeContent=${cfg.backdropVerticalBadgeContent}&thumbnailVerticalBadgeContent=${cfg.thumbnailVerticalBadgeContent}
 
 For thumbnails use thumbnailRatingsLayout and thumbnailSize instead of imageText.
 Omit imageText when type=logo or type=thumbnail.

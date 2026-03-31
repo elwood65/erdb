@@ -36,7 +36,12 @@ import {
   normalizeRatingStyle,
   type RatingStyle,
 } from '@/lib/ratingStyle';
-import { getImdbRatingFromDataset } from '@/lib/imdbDataset';
+import {
+  buildIncludeImageLanguage,
+  getTmdbLanguageBase,
+  normalizeTmdbLanguageCode,
+} from '@/lib/tmdbLanguage';
+import { findImdbEpisodeBySeriesSeasonEpisode, getImdbEpisodeFromDataset, getImdbRatingFromDataset } from '@/lib/imdbDataset';
 import { scheduleImdbDatasetSync } from '@/lib/imdbDatasetSync';
 // Removed mdblistRequestLogs import
 
@@ -54,6 +59,7 @@ export const runtime = 'nodejs';
 type PosterTextPreference = 'original' | 'clean' | 'alternative';
 type RenderImageType = 'poster' | 'backdrop' | 'logo' | 'thumbnail';
 type AnimeMappingProvider = 'mal' | 'anilist' | 'imdb' | 'tmdb' | 'anidb';
+type AiometadataEpisodeProvider = 'tvdb' | 'realimdb';
 type StreamBadgeKey = '4k' | 'hdr' | 'dolbyvision' | 'dolbyatmos' | 'remux';
 type BadgeKey = RatingPreference | StreamBadgeKey;
 type QualityBadgesSide = 'left' | 'right';
@@ -76,6 +82,7 @@ const ANIME_MAPPING_PROVIDER_SET = new Set<AnimeMappingProvider>([
   'tmdb',
   'anidb',
 ]);
+const AIOMETADATA_EPISODE_PROVIDER_SET = new Set<AiometadataEpisodeProvider>(['tvdb', 'realimdb']);
 const ANIME_NATIVE_INPUT_ID_PREFIX_SET = new Set(['kitsu', 'mal', 'anilist', 'anidb']);
 const parseApiKeyList = (...values: Array<string | undefined>) => {
   const result: string[] = [];
@@ -99,6 +106,13 @@ const toAnimeMappingProvider = (value?: string | null): AnimeMappingProvider | n
     ? (normalized as AnimeMappingProvider)
     : null;
 };
+const normalizeAiometadataEpisodeProvider = (value?: string | null): AiometadataEpisodeProvider | null => {
+  const normalized = (value || '').trim().toLowerCase();
+  if (!normalized) return null;
+  return AIOMETADATA_EPISODE_PROVIDER_SET.has(normalized as AiometadataEpisodeProvider)
+    ? (normalized as AiometadataEpisodeProvider)
+    : null;
+};
 const parseCacheTtlMs = (value: string | undefined, fallbackMs: number, minMs: number, maxMs: number) => {
   if (!value) return fallbackMs;
   const parsed = Number(value);
@@ -111,7 +125,7 @@ const parseNonNegativeInt = (value?: string | null, max = Number.MAX_SAFE_INTEGE
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return Math.min(max, Math.floor(parsed));
 };
-const FINAL_IMAGE_RENDERER_CACHE_VERSION = 'poster-backdrop-logo-thumbnail-v40';
+const FINAL_IMAGE_RENDERER_CACHE_VERSION = 'poster-backdrop-logo-thumbnail-v45';
 const TMDB_CACHE_TTL_MS = parseCacheTtlMs(
   process.env.ERDB_TMDB_CACHE_TTL_MS,
   3 * 24 * 60 * 60 * 1000,
@@ -198,6 +212,11 @@ type CachedJsonResponse = {
   status: number;
   data: any;
 };
+type CachedTextResponse = {
+  ok: boolean;
+  status: number;
+  data: string | null;
+};
 type CachedJsonNetworkObserver = {
   onNetworkResponse?: (input: {
     key: string;
@@ -251,6 +270,20 @@ const streamBadgesInFlight = new Map<string, Promise<StreamBadgesResult>>();
 const mdbListRateLimitedUntil = new Map<string, number>();
 let mdbListApiKeyCursor = 0;
 const sha1Hex = (value: string) => createHash('sha1').update(value).digest('hex');
+const buildSecretCacheSeed = (name: string, value?: string | null) => {
+  const normalized = String(value || '').trim();
+  return normalized ? `${name}:${sha1Hex(normalized).slice(0, 12)}` : `${name}:none`;
+};
+const buildMdbListCacheSeed = (manualApiKey?: string | null) => {
+  const normalizedManual = String(manualApiKey || '').trim();
+  if (normalizedManual) {
+    return `mdblist:manual:${sha1Hex(normalizedManual).slice(0, 12)}`;
+  }
+  if (!MDBLIST_API_KEYS.length) {
+    return 'mdblist:none';
+  }
+  return `mdblist:pool:${sha1Hex(MDBLIST_API_KEYS.join('|')).slice(0, 12)}`;
+};
 const safeCompareText = (left: string, right: string) => {
   if (!left || !right || left.length !== right.length) {
     return false;
@@ -1114,20 +1147,30 @@ const fetchAnimemappingPayload = async ({
   provider,
   externalId,
   season,
+  episode,
   phases,
 }: {
   provider: AnimeMappingProvider;
   externalId: string;
   season?: string | number | null;
+  episode?: string | number | null;
   phases: PhaseDurations;
 }) => {
   const normalizedExternalId = externalId.trim();
   if (!normalizedExternalId) return null;
 
   const normalizedSeason = String(season ?? '').trim();
-  const seasonQuery = normalizedSeason ? `?s=${encodeURIComponent(normalizedSeason)}` : '';
-  const cacheKey = `animemapping:${provider}:${normalizedExternalId}:s:${normalizedSeason || '-'}`;
-  const url = `https://animemapping.stremio.dpdns.org/${provider}/${encodeURIComponent(normalizedExternalId)}${seasonQuery}`;
+  const normalizedEpisode = String(episode ?? '').trim();
+  const searchParams = new URLSearchParams();
+  if (normalizedSeason) {
+    searchParams.set('s', normalizedSeason);
+  }
+  if (normalizedEpisode) {
+    searchParams.set('ep', normalizedEpisode);
+  }
+  const query = searchParams.toString();
+  const cacheKey = `animemapping:${provider}:${normalizedExternalId}:s:${normalizedSeason || '-'}:e:${normalizedEpisode || '-'}`;
+  const url = `https://animemapping.realbestia.com/${provider}/${encodeURIComponent(normalizedExternalId)}${query ? `?${query}` : ''}`;
 
   try {
     const response = await fetchJsonCached(
@@ -1376,6 +1419,23 @@ const fetchKitsuRating = async (kitsuId: string, phases: PhaseDurations) => {
   return normalizeRatingValue(attributes?.averageRating);
 };
 
+// Older proxy URLs may still include a placeholder season: `kitsu:id:season:episode`.
+const parseKitsuInputParts = (parts: string[]) => {
+  const mediaId = parts[1] || '';
+  if (parts.length >= 4) {
+    return {
+      mediaId,
+      season: null,
+      episode: parts[3] || null,
+    };
+  }
+  return {
+    mediaId,
+    season: null,
+    episode: parts.length > 2 ? parts[2] : null,
+  };
+};
+
 const ANILIST_GRAPHQL_URL = 'https://graphql.anilist.co';
 
 const fetchAnilistRating = async (anilistId: string, phases: PhaseDurations) => {
@@ -1516,37 +1576,280 @@ const fetchJsonCached = async (
   });
 };
 
-const normalizeImageLanguage = (value?: string | null) => {
-  if (!value) return null;
-  const normalized = value.toLowerCase();
-  if (normalized === 'us' || normalized === 'en-us') return 'en';
-  if (normalized.includes('-')) return normalized.split('-')[0];
-  return normalized;
+const fetchTextCached = async (
+  key: string,
+  url: string,
+  ttlMs: number,
+  phases: PhaseDurations,
+  phase: keyof PhaseDurations,
+  init?: RequestInit
+): Promise<CachedTextResponse> => {
+  const cached = getMetadata<CachedTextResponse>(key);
+  if (cached) {
+    return cached;
+  }
+
+  return withDedupe(metadataInFlight, key, async () => {
+    const fromCache = getMetadata<CachedTextResponse>(key);
+    if (fromCache) return fromCache;
+
+    const response = await measurePhase(phases, phase, () =>
+      fetch(url, {
+        cache: 'no-store',
+        redirect: 'follow',
+        ...init,
+      })
+    );
+
+    let data: string | null = null;
+    try {
+      data = await response.text();
+    } catch {
+      data = null;
+    }
+
+    const payload: CachedTextResponse = {
+      ok: response.ok,
+      status: response.status,
+      data,
+    };
+    const failureTtlMs = Math.min(ttlMs, 2 * 60 * 1000);
+    setMetadata(key, payload, response.ok ? ttlMs : failureTtlMs);
+    return payload;
+  });
 };
 
-const buildIncludeImageLanguage = (preferredLang: string, fallbackLang: string) => {
-  const languages = [normalizeImageLanguage(preferredLang), normalizeImageLanguage(fallbackLang), 'null']
-    .filter(Boolean) as string[];
-  return [...new Set(languages)].join(',');
+const extractTvdbEpisodeIdFromAiredOrderHtml = (
+  html: string,
+  seriesPageUrl: string,
+  season: string,
+  episode: string
+) => {
+  const seasonNumber = parseInt(season, 10);
+  const episodeNumber = parseInt(episode, 10);
+  if (!Number.isFinite(seasonNumber) || !Number.isFinite(episodeNumber)) return null;
+
+  const escapedSeriesSlug = seriesPageUrl
+    .replace(/^https?:\/\/thetvdb\.com/i, '')
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const episodeCode = `S${String(seasonNumber).padStart(2, '0')}E${String(episodeNumber).padStart(2, '0')}`;
+  const matcher = new RegExp(
+    `${episodeCode}[\\s\\S]{0,1200}?href="${escapedSeriesSlug}/episodes/(\\d+)"`,
+    'i'
+  );
+  return html.match(matcher)?.[1] || null;
+};
+
+const resolveTvdbEpisodeToTmdb = async (
+  seriesId: string,
+  season: string,
+  episode: string,
+  tmdbKey: string,
+  phases: PhaseDurations
+) => {
+  const seriesUrl = `https://thetvdb.com/dereferrer/series/${encodeURIComponent(seriesId)}`;
+  const seriesPageUrl = await measurePhase(phases, 'tmdb', async () => {
+    const response = await fetch(seriesUrl, { cache: 'no-store', redirect: 'follow' });
+    return response.ok ? response.url : null;
+  }).catch(() => null);
+  if (!seriesPageUrl) return null;
+
+  const airedOrderUrl = `${seriesPageUrl.replace(/\/+$/, '')}/allseasons/official`;
+  const airedOrderResponse = await fetchTextCached(
+    `tvdb:series:${seriesId}:aired-order`,
+    airedOrderUrl,
+    TMDB_CACHE_TTL_MS,
+    phases,
+    'tmdb'
+  );
+  if (!airedOrderResponse.ok || !airedOrderResponse.data) return null;
+
+  const tvdbEpisodeId = extractTvdbEpisodeIdFromAiredOrderHtml(
+    airedOrderResponse.data,
+    seriesPageUrl,
+    season,
+    episode
+  );
+  if (!tvdbEpisodeId) return null;
+
+  const findResponse = await fetchJsonCached(
+    `tmdb:find:tvdb-episode:${tvdbEpisodeId}`,
+    `https://api.themoviedb.org/3/find/${tvdbEpisodeId}?api_key=${tmdbKey}&external_source=tvdb_id`,
+    TMDB_CACHE_TTL_MS,
+    phases,
+    'tmdb'
+  );
+  const episodeResult = Array.isArray(findResponse.data?.tv_episode_results)
+    ? findResponse.data.tv_episode_results[0]
+    : null;
+  const showId = Number(episodeResult?.show_id);
+  const seasonNumber = Number(episodeResult?.season_number);
+  const episodeNumber = Number(episodeResult?.episode_number);
+  if (!Number.isFinite(showId)) return null;
+
+  return {
+    showId: String(showId),
+    season: Number.isFinite(seasonNumber) ? String(seasonNumber) : null,
+    episode: Number.isFinite(episodeNumber) ? String(episodeNumber) : null,
+  };
+};
+
+const resolveImdbEpisodeWithTvdbOrderToTmdb = async (
+  imdbSeriesId: string,
+  season: string,
+  episode: string,
+  tmdbKey: string,
+  phases: PhaseDurations
+) => {
+  const findResponse = await fetchJsonCached(
+    `tmdb:find:imdb-series:${imdbSeriesId}`,
+    `https://api.themoviedb.org/3/find/${imdbSeriesId}?api_key=${tmdbKey}&external_source=imdb_id`,
+    TMDB_CACHE_TTL_MS,
+    phases,
+    'tmdb'
+  );
+  const tvResult = Array.isArray(findResponse.data?.tv_results) ? findResponse.data.tv_results[0] : null;
+  const tmdbShowId = Number(tvResult?.id);
+  if (!Number.isFinite(tmdbShowId)) return null;
+
+  const externalIdsResponse = await fetchJsonCached(
+    `tmdb:tv:${tmdbShowId}:external_ids`,
+    `https://api.themoviedb.org/3/tv/${tmdbShowId}/external_ids?api_key=${tmdbKey}`,
+    TMDB_CACHE_TTL_MS,
+    phases,
+    'tmdb'
+  );
+  const rawTvdbSeriesId = externalIdsResponse.data?.tvdb_id;
+  const tvdbSeriesId =
+    typeof rawTvdbSeriesId === 'number' && Number.isFinite(rawTvdbSeriesId)
+      ? String(rawTvdbSeriesId)
+      : typeof rawTvdbSeriesId === 'string' && rawTvdbSeriesId.trim().length > 0
+        ? rawTvdbSeriesId.trim()
+        : null;
+  if (!tvdbSeriesId) return null;
+
+  const mappedEpisode = await resolveTvdbEpisodeToTmdb(tvdbSeriesId, season, episode, tmdbKey, phases);
+  if (!mappedEpisode?.showId) return null;
+
+  return {
+    ...mappedEpisode,
+    tvdbSeriesId,
+  };
+};
+
+const resolveTmdbEpisodeByYearBucket = async (
+  tmdbShowId: string,
+  requestedBucketSeason: string,
+  requestedBucketEpisode: string,
+  tmdbKey: string,
+  phases: PhaseDurations
+) => {
+  const bucketSeason = parseInt(requestedBucketSeason, 10);
+  const bucketEpisode = parseInt(requestedBucketEpisode, 10);
+  if (!Number.isFinite(bucketSeason) || !Number.isFinite(bucketEpisode) || bucketSeason < 1 || bucketEpisode < 1) {
+    return null;
+  }
+
+  const showResponse = await fetchJsonCached(
+    `tmdb:tv:${tmdbShowId}`,
+    `https://api.themoviedb.org/3/tv/${tmdbShowId}?api_key=${tmdbKey}`,
+    TMDB_CACHE_TTL_MS,
+    phases,
+    'tmdb'
+  );
+  if (!showResponse.ok) return null;
+
+  const numberOfSeasons = Number(showResponse.data?.number_of_seasons);
+  if (!Number.isFinite(numberOfSeasons) || numberOfSeasons < 1) return null;
+
+  const yearBuckets = new Map<number, Array<{ tmdbSeason: number; tmdbEpisode: number }>>();
+  for (let seasonIndex = 1; seasonIndex <= numberOfSeasons; seasonIndex += 1) {
+    const seasonResponse = await fetchJsonCached(
+      `tmdb:tv:${tmdbShowId}:season:${seasonIndex}`,
+      `https://api.themoviedb.org/3/tv/${tmdbShowId}/season/${seasonIndex}?api_key=${tmdbKey}`,
+      TMDB_CACHE_TTL_MS,
+      phases,
+      'tmdb'
+    );
+    if (!seasonResponse.ok || !Array.isArray(seasonResponse.data?.episodes)) continue;
+
+    for (const episodeData of seasonResponse.data.episodes) {
+      const airDate = typeof episodeData?.air_date === 'string' ? episodeData.air_date : '';
+      const year = parseInt(airDate.slice(0, 4), 10);
+      const tmdbEpisode = Number(episodeData?.episode_number);
+      if (!Number.isFinite(year) || !Number.isFinite(tmdbEpisode)) continue;
+      const bucket = yearBuckets.get(year) || [];
+      bucket.push({ tmdbSeason: seasonIndex, tmdbEpisode });
+      yearBuckets.set(year, bucket);
+    }
+  }
+
+  const orderedYears = [...yearBuckets.keys()].sort((a, b) => a - b);
+  const targetYear = orderedYears[bucketSeason - 1];
+  if (!Number.isFinite(targetYear)) return null;
+  const bucketEpisodes = yearBuckets.get(targetYear) || [];
+  const targetEpisode = bucketEpisodes[bucketEpisode - 1];
+  if (!targetEpisode) return null;
+
+  return {
+    showId: tmdbShowId,
+    season: String(targetEpisode.tmdbSeason),
+    episode: String(targetEpisode.tmdbEpisode),
+  };
+};
+
+const getImageLanguageTag = (item: any) => {
+  if (!item?.iso_639_1) return null;
+  if (typeof item?.iso_3166_1 === 'string' && item.iso_3166_1.trim()) {
+    return `${item.iso_639_1}-${item.iso_3166_1}`;
+  }
+
+  return item.iso_639_1;
 };
 
 const pickByLanguageWithFallback = (
   items: any[] = [],
   preferredLang: string,
-  fallbackLang: string
+  fallbackLang: string,
+  preferredPath?: string | null
 ) => {
   if (!Array.isArray(items) || items.length === 0) return null;
 
-  const preferred = normalizeImageLanguage(preferredLang);
-  const fallback = normalizeImageLanguage(fallbackLang);
+  if (preferredPath) {
+    const preferredPathItem = items.find((item: any) => item?.file_path === preferredPath);
+    if (preferredPathItem) {
+      return preferredPathItem;
+    }
+  }
+
+  const findItemByLanguage = (language: string | null) => {
+    if (!language) {
+      return null;
+    }
+
+    const exactMatch = items.find((item: any) => normalizeTmdbLanguageCode(getImageLanguageTag(item)) === language);
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const baseLanguage = getTmdbLanguageBase(language);
+    if (!baseLanguage) {
+      return null;
+    }
+
+    return items.find((item: any) => getTmdbLanguageBase(getImageLanguageTag(item)) === baseLanguage) || null;
+  };
+
+  const preferred = normalizeTmdbLanguageCode(preferredLang);
+  const fallback = normalizeTmdbLanguageCode(fallbackLang);
 
   if (preferred) {
-    const preferredItem = items.find((item: any) => normalizeImageLanguage(item?.iso_639_1) === preferred);
+    const preferredItem = findItemByLanguage(preferred);
     if (preferredItem) return preferredItem;
   }
 
   if (fallback) {
-    const fallbackItem = items.find((item: any) => normalizeImageLanguage(item?.iso_639_1) === fallback);
+    const fallbackItem = findItemByLanguage(fallback);
     if (fallbackItem) return fallbackItem;
   }
 
@@ -1558,7 +1861,7 @@ const isTextlessPosterSelection = (posters: any[] = [], selectedPoster?: any | n
 
   return posters.some(
     (poster: any) =>
-      poster?.file_path === selectedPoster.file_path && normalizeImageLanguage(poster?.iso_639_1) === null
+      poster?.file_path === selectedPoster.file_path && normalizeTmdbLanguageCode(getImageLanguageTag(poster)) === null
   );
 };
 
@@ -1572,8 +1875,8 @@ const pickPosterByPreference = (
   if (!Array.isArray(posters) || posters.length === 0) return null;
 
   const canonicalOriginalPath =
+    pickByLanguageWithFallback(posters, preferredLang, fallbackLang, originalPosterPath)?.file_path ||
     originalPosterPath ||
-    pickByLanguageWithFallback(posters, preferredLang, fallbackLang)?.file_path ||
     posters[0]?.file_path ||
     null;
   const originalPoster = canonicalOriginalPath
@@ -1587,7 +1890,7 @@ const pickPosterByPreference = (
   if (preference === 'clean') {
     return (
       posters.find((poster: any) => !poster.iso_639_1) ||
-      pickByLanguageWithFallback(posters, preferredLang, fallbackLang) ||
+      pickByLanguageWithFallback(posters, preferredLang, fallbackLang, originalPosterPath) ||
       fallbackOriginal
     );
   }
@@ -1613,8 +1916,8 @@ const pickBackdropByPreference = (
   if (!Array.isArray(backdrops) || backdrops.length === 0) return null;
 
   const canonicalOriginalPath =
+    pickByLanguageWithFallback(backdrops, preferredLang, fallbackLang, originalBackdropPath)?.file_path ||
     originalBackdropPath ||
-    pickByLanguageWithFallback(backdrops, preferredLang, fallbackLang)?.file_path ||
     backdrops[0]?.file_path ||
     null;
   const originalBackdrop = canonicalOriginalPath
@@ -1629,7 +1932,7 @@ const pickBackdropByPreference = (
   if (preference === 'clean') {
     return (
       backdrops.find((backdrop: any) => !backdrop.iso_639_1) ||
-      pickByLanguageWithFallback(backdrops, preferredLang, fallbackLang) ||
+      pickByLanguageWithFallback(backdrops, preferredLang, fallbackLang, originalBackdropPath) ||
       fallbackOriginal
     );
   }
@@ -1660,6 +1963,11 @@ type FastRenderInput = {
   posterRowHorizontalInset: number;
   posterTitleText?: string | null;
   posterLogoUrl?: string | null;
+  posterReferenceBadgeHeight?: number;
+  posterReferenceVerticalBadgeHeight?: number;
+  posterReferenceBadgeGap?: number;
+  thumbnailFallbackEpisodeText?: string | null;
+  thumbnailFallbackEpisodeCode?: string | null;
   badgeIconSize: number;
   badgeFontSize: number;
   badgePaddingX: number;
@@ -1677,11 +1985,13 @@ type FastRenderInput = {
   backdropRatingsLayout: BackdropRatingLayout | ThumbnailRatingLayout;
   thumbnailRatingsLayout: ThumbnailRatingLayout;
   thumbnailSize: ThumbnailSize;
+  verticalBadgeContent: 'standard' | 'stacked';
   ratingStyle: RatingStyle;
   topBadges: RatingBadge[];
   bottomBadges: RatingBadge[];
   leftBadges: RatingBadge[];
   rightBadges: RatingBadge[];
+  backdropColumns?: RatingBadge[][];
   backdropRows?: RatingBadge[][];
   cacheControl: string;
 };
@@ -2108,6 +2418,58 @@ const buildPosterTitleSvg = (title: string, maxWidth: number) => {
   return { svg, width, height };
 };
 
+const buildThumbnailFallbackTitleSvg = (
+  episodeCode: string,
+  title: string,
+  maxWidth: number
+) => {
+  const normalizedCode = episodeCode.replace(/\s+/g, ' ').trim();
+  const normalizedTitle = title.replace(/\s+/g, ' ').trim();
+  if (!normalizedCode && !normalizedTitle) return null;
+
+  const titleLines = normalizedTitle ? splitTitleForPosterText(normalizedTitle).slice(0, 2) : [];
+  const width = Math.max(320, Math.round(maxWidth));
+  const contentWidth = Math.max(260, width - 40);
+  const codeFontSize = 22;
+  const titleBaseFontSize = titleLines.length <= 1 ? 34 : 30;
+  const longestTitleWidth = Math.max(
+    ...titleLines.map((line) => estimateGeneratedLogoLineWidth(line, titleBaseFontSize)),
+    1
+  );
+  const titleWidthFitScale = Math.min(1, contentWidth / longestTitleWidth);
+  const titleFontSize = Math.max(20, Math.floor(titleBaseFontSize * titleWidthFitScale));
+  const titleLineHeight = Math.round(titleFontSize * 1.08);
+  const codeY = 32;
+  const titleStartY = normalizedCode ? 62 : 36;
+  const titleTspans = titleLines
+    .map((line, index) => {
+      const y = titleStartY + index * titleLineHeight;
+      const estimatedLineWidth = estimateGeneratedLogoLineWidth(line, titleFontSize);
+      const textLength =
+        estimatedLineWidth > contentWidth
+          ? ` textLength="${contentWidth}" lengthAdjust="spacingAndGlyphs"`
+          : '';
+      return `<tspan x="20" y="${y}"${textLength}>${escapeXml(line)}</tspan>`;
+    })
+    .join('');
+  const height = Math.max(56, 28 + (normalizedCode ? 24 : 0) + titleLines.length * titleLineHeight + 18);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+<defs>
+  <linearGradient id="thumbnail-fallback-bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="rgba(15,23,42,0.84)" />
+    <stop offset="100%" stop-color="rgba(2,6,23,0.92)" />
+  </linearGradient>
+  <filter id="thumbnail-fallback-shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000000" flood-opacity="0.42" />
+  </filter>
+</defs>
+<rect x="0.75" y="0.75" width="${Math.max(0, width - 1.5)}" height="${Math.max(0, height - 1.5)}" rx="18" fill="url(#thumbnail-fallback-bg)" stroke="rgba(255,255,255,0.14)" filter="url(#thumbnail-fallback-shadow)" />
+${normalizedCode ? `<text x="20" y="${codeY}" font-family="'Noto Sans','DejaVu Sans',Arial,sans-serif" font-size="${codeFontSize}" font-weight="800" letter-spacing="1.4" fill="rgba(255,255,255,0.82)">${escapeXml(normalizedCode)}</text>` : ''}
+${titleLines.length > 0 ? `<text x="20" y="${titleStartY}" font-family="'Noto Sans','DejaVu Sans',Arial,sans-serif" font-size="${titleFontSize}" font-weight="800" fill="#ffffff">${titleTspans}</text>` : ''}
+</svg>`;
+  return { svg, width, height };
+};
+
 const chunkBy = <T,>(items: T[], size: number): T[][] => {
   if (size <= 0) return [items];
   const chunks: T[][] = [];
@@ -2146,6 +2508,10 @@ const DEFAULT_BADGE_MIN_METRICS: BadgeLayoutMetrics = {
   paddingX: 8,
   paddingY: 6,
   gap: 6,
+};
+const normalizeVerticalBadgeContent = (value?: string | null): 'standard' | 'stacked' => {
+  const normalized = (value || '').trim().toLowerCase();
+  return normalized === 'stacked' ? 'stacked' : 'standard';
 };
 const getBadgeTextRightInset = (
   value: string,
@@ -2214,15 +2580,39 @@ const estimateBadgeWidth = (
   paddingX: number,
   iconSize: number,
   gap: number,
-  compactText = false
+  compactText = false,
+  contentLayout: 'standard' | 'stacked' = 'standard'
 ) => {
   const textWidth = estimateBadgeTextWidth(value, fontSize, compactText);
   const outerPadding = Math.max(6, Math.round(paddingX * 0.7));
   const innerGap = outerPadding;
+  if (contentLayout === 'stacked') {
+    return Math.max(
+      outerPadding * 2 + iconSize,
+      outerPadding * 2 + textWidth,
+      outerPadding * 2 + Math.round(fontSize * (compactText ? 1.12 : 1.25))
+    );
+  }
   return Math.max(
     outerPadding + iconSize + innerGap + textWidth + outerPadding,
     outerPadding + iconSize + innerGap + outerPadding + Math.round(fontSize * (compactText ? 1.12 : 1.25))
   );
+};
+const estimateBadgeHeight = (
+  fontSize: number,
+  paddingX: number,
+  paddingY: number,
+  iconSize: number,
+  contentLayout: 'standard' | 'stacked' = 'standard'
+) => {
+  if (contentLayout === 'stacked') {
+    const outerPadding = Math.max(6, Math.round(paddingX * 0.7));
+    const innerGap = Math.max(6, Math.round(paddingY));
+    const textBlockHeight = Math.max(Math.round(fontSize * 1.24), fontSize + 6);
+    const bottomPadding = Math.max(outerPadding + 2, paddingY + 4);
+    return outerPadding + iconSize + innerGap + textBlockHeight + bottomPadding;
+  }
+  return iconSize + paddingY * 2;
 };
 const getMinimumCompressedBadgeWidth = (
   value: string,
@@ -2230,18 +2620,27 @@ const getMinimumCompressedBadgeWidth = (
   paddingX: number,
   iconSize: number,
   gap: number,
-  compactText = false
-) =>
-  Math.max(6, Math.round(paddingX * 0.7)) +
-  iconSize +
-  Math.max(6, Math.round(paddingX * 0.7)) +
-  Math.max(6, Math.round(paddingX * 0.7)) +
-  Math.round(fontSize * (compactText ? 0.82 : 0.92));
+  compactText = false,
+  contentLayout: 'standard' | 'stacked' = 'standard'
+) => {
+  const outerPadding = Math.max(6, Math.round(paddingX * 0.7));
+  if (contentLayout === 'stacked') {
+    return Math.max(outerPadding * 2 + iconSize, outerPadding * 2 + Math.round(fontSize * (compactText ? 0.82 : 0.92)));
+  }
+  return (
+    outerPadding +
+    iconSize +
+    outerPadding +
+    outerPadding +
+    Math.round(fontSize * (compactText ? 0.82 : 0.92))
+  );
+};
 
 const measureBadgeRowWidth = (
   rowBadges: RatingBadge[],
   metrics: BadgeLayoutMetrics,
-  compactText = false
+  compactText = false,
+  contentLayout: 'standard' | 'stacked' = 'standard'
 ) => {
   if (rowBadges.length === 0) return 0;
   return (
@@ -2254,7 +2653,8 @@ const measureBadgeRowWidth = (
           metrics.paddingX,
           metrics.iconSize,
           metrics.gap,
-          compactText
+          compactText,
+          contentLayout
         ),
       0
     ) +
@@ -2268,13 +2668,14 @@ const fitPosterBadgeMetricsToWidth = (
   initialMetrics: BadgeLayoutMetrics,
   minMetrics: BadgeLayoutMetrics = DEFAULT_BADGE_MIN_METRICS,
   compactText = false,
-  preserveContent = false
+  preserveContent = false,
+  contentLayout: 'standard' | 'stacked' = 'standard'
 ) => {
   const maxRowWidth = Math.max(0, outputWidth - 24);
   const metrics: BadgeLayoutMetrics = { ...initialMetrics };
 
   const measureWidestRow = () =>
-    rows.reduce((maxWidth, row) => Math.max(maxWidth, measureBadgeRowWidth(row, metrics, compactText)), 0);
+    rows.reduce((maxWidth, row) => Math.max(maxWidth, measureBadgeRowWidth(row, metrics, compactText, contentLayout)), 0);
 
   let widestRow = measureWidestRow();
   let attempts = 0;
@@ -2327,9 +2728,19 @@ const fitPosterBadgeMetricsToWidth = (
   return metrics;
 };
 
-const measureBadgeColumnHeight = (columnBadges: RatingBadge[], metrics: BadgeLayoutMetrics) => {
+const measureBadgeColumnHeight = (
+  columnBadges: RatingBadge[],
+  metrics: BadgeLayoutMetrics,
+  contentLayout: 'standard' | 'stacked' = 'standard'
+) => {
   if (columnBadges.length === 0) return 0;
-  const badgeHeight = metrics.iconSize + metrics.paddingY * 2;
+  const badgeHeight = estimateBadgeHeight(
+    metrics.fontSize,
+    metrics.paddingX,
+    metrics.paddingY,
+    metrics.iconSize,
+    contentLayout
+  );
   return columnBadges.length * badgeHeight + Math.max(0, columnBadges.length - 1) * metrics.gap;
 };
 
@@ -2338,9 +2749,16 @@ const getMaxBadgeColumnCount = (
   metrics: BadgeLayoutMetrics,
   topOffset: number,
   bottomOffset: number,
-  reservedTopRows = 0
+  reservedTopRows = 0,
+  contentLayout: 'standard' | 'stacked' = 'standard'
 ) => {
-  const badgeHeight = metrics.iconSize + metrics.paddingY * 2;
+  const badgeHeight = estimateBadgeHeight(
+    metrics.fontSize,
+    metrics.paddingX,
+    metrics.paddingY,
+    metrics.iconSize,
+    contentLayout
+  );
   const step = badgeHeight + metrics.gap;
   const reservedTopHeight = reservedTopRows > 0 ? reservedTopRows * step : 0;
   const availableHeight = Math.max(0, outputHeight - topOffset - bottomOffset - reservedTopHeight);
@@ -2355,18 +2773,25 @@ const fitPosterBadgeMetricsToHeight = (
   topOffset: number,
   bottomOffset: number,
   minMetrics: BadgeLayoutMetrics = DEFAULT_BADGE_MIN_METRICS,
-  reservedTopRows = 0
+  reservedTopRows = 0,
+  contentLayout: 'standard' | 'stacked' = 'standard'
 ) => {
   const metrics: BadgeLayoutMetrics = { ...initialMetrics };
   const getMaxColumnHeight = () => {
-    const badgeHeight = metrics.iconSize + metrics.paddingY * 2;
+    const badgeHeight = estimateBadgeHeight(
+      metrics.fontSize,
+      metrics.paddingX,
+      metrics.paddingY,
+      metrics.iconSize,
+      contentLayout
+    );
     const reservedTopHeight =
       reservedTopRows > 0 ? reservedTopRows * (badgeHeight + metrics.gap) : 0;
     return Math.max(0, outputHeight - topOffset - bottomOffset - reservedTopHeight);
   };
 
   const measureTallestColumn = () =>
-    columns.reduce((maxHeight, column) => Math.max(maxHeight, measureBadgeColumnHeight(column, metrics)), 0);
+    columns.reduce((maxHeight, column) => Math.max(maxHeight, measureBadgeColumnHeight(column, metrics, contentLayout)), 0);
 
   let tallestColumn = measureTallestColumn();
   let attempts = 0;
@@ -2502,6 +2927,55 @@ const getBackdropBadgePlacement = (
   };
 };
 
+const splitBackdropVerticalBadgesIntoColumns = (
+  badges: RatingBadge[],
+  placement: BackdropBadgePlacement,
+  metrics: BadgeLayoutMetrics,
+  maxPerColumn: number,
+  contentLayout: 'standard' | 'stacked' = 'standard',
+  maxColumns = 3
+) => {
+  if (badges.length === 0 || maxPerColumn <= 0) return [];
+  const effectiveMaxColumns = Math.max(1, maxColumns);
+  const columnGap = Math.max(12, metrics.gap);
+  const estimateColumnMaxWidth = (columnBadges: RatingBadge[]) =>
+    columnBadges.reduce(
+      (maxWidth, badge) =>
+        Math.max(
+          maxWidth,
+          estimateBadgeWidth(
+            badge.value,
+            metrics.fontSize,
+            metrics.paddingX,
+            metrics.iconSize,
+            metrics.gap,
+            false,
+            contentLayout
+          )
+        ),
+      0
+    );
+  const requestedColumnCount = Math.max(1, Math.ceil(badges.length / maxPerColumn));
+  const startingColumnCount = Math.min(effectiveMaxColumns, requestedColumnCount);
+
+  for (let columnCount = startingColumnCount; columnCount >= 1; columnCount -= 1) {
+    const visibleBadges = badges.slice(0, columnCount * maxPerColumn);
+    const orderedColumns = Array.from({ length: columnCount }, (_, index) =>
+      visibleBadges.slice(index * maxPerColumn, (index + 1) * maxPerColumn)
+    ).filter((column) => column.length > 0);
+    const visualColumns =
+      placement.align === 'right' ? [...orderedColumns].reverse() : orderedColumns;
+    const totalWidth =
+      visualColumns.reduce((sum, column) => sum + estimateColumnMaxWidth(column), 0) +
+      Math.max(0, visualColumns.length - 1) * columnGap;
+    if (totalWidth <= placement.width) {
+      return visualColumns;
+    }
+  }
+
+  return [badges.slice(0, maxPerColumn)];
+};
+
 const getBadgeOuterRadius = (height: number, ratingStyle: RatingStyle) =>
   ratingStyle === 'square' ? Math.max(10, Math.round(height * 0.24)) : Math.round(height / 2);
 
@@ -2518,7 +2992,7 @@ const buildQualityBadgeSvg = (
   const radius = style === 'glass' ? Math.round(h / 2) : Math.round(h * 0.18);
   const strokeWidth =
     style === 'glass'
-      ? Math.max(1, Math.round(h * 0.04))
+      ? 1
       : style === 'square'
         ? Math.max(1, Math.round(h * 0.05))
         : Math.max(2, Math.round(h * 0.08));
@@ -2530,16 +3004,18 @@ const buildQualityBadgeSvg = (
     if (style === 'plain') return null;
     if (style === 'glass') {
       return {
-        stroke: 'rgba(255,255,255,0.45)',
+        stroke: accentColor,
+        strokeOpacity: '0.58',
         fill: 'rgba(17,24,39,0.70)',
       };
     }
-    return { stroke: accentColor, fill: '#0b0b0b' };
+    return { stroke: accentColor, strokeOpacity: '1', fill: '#0b0b0b' };
   };
   const buildRect = (width: number, accentColor: string, extra = '') => {
     const chrome = resolveChrome(accentColor);
     if (!chrome) return '';
-    return baseRect(width, chrome.stroke, chrome.fill, extra);
+    const chromeExtra = chrome.strokeOpacity ? `${extra} stroke-opacity="${chrome.strokeOpacity}"` : extra;
+    return baseRect(width, chrome.stroke, chrome.fill, chromeExtra);
   };
 
   if (key === '4k') {
@@ -2645,6 +3121,7 @@ const buildBadgeSvg = ({
   value,
   ratingStyle,
   compactText = false,
+  contentLayout = 'standard',
 }: {
   width: number;
   height: number;
@@ -2659,20 +3136,38 @@ const buildBadgeSvg = ({
   value: string;
   ratingStyle: RatingStyle;
   compactText?: boolean;
+  contentLayout?: 'standard' | 'stacked';
 }) => {
   const radius = getBadgeOuterRadius(height, ratingStyle);
+  const outerRadius =
+    contentLayout === 'stacked' && ratingStyle === 'glass'
+      ? Math.max(16, Math.round(iconSize * 0.78))
+      : radius;
   const iconRadius = getBadgeIconRadius(iconSize, ratingStyle);
   const outerPadding = Math.max(6, Math.round(paddingX * 0.7));
-  const innerGap = outerPadding;
-  const iconX = outerPadding;
+  const innerGap = contentLayout === 'stacked' ? Math.max(4, Math.round(outerPadding * 0.65)) : outerPadding;
+  const iconX =
+    contentLayout === 'stacked'
+      ? Math.max(outerPadding, Math.round((width - iconSize) / 2))
+      : outerPadding;
+  const iconY =
+    contentLayout === 'stacked'
+      ? outerPadding
+      : Math.round((height - iconSize) / 2);
   const iconCx = iconX + Math.round(iconSize / 2);
-  const iconCy = Math.round(height / 2);
+  const iconCy = iconY + Math.round(iconSize / 2);
   const iconFontSize = Math.max(12, Math.round(iconSize * 0.42));
-  const valueX = iconX + iconSize + innerGap;
-  const valueY = Math.round(height / 2 + fontSize * 0.36);
+  const valueX = contentLayout === 'stacked' ? Math.round(width / 2) : iconX + iconSize + innerGap;
+  const valueY =
+    contentLayout === 'stacked'
+      ? iconY + iconSize + innerGap + fontSize
+      : Math.round(height / 2 + fontSize * 0.36);
   const valueTextWidth = estimateBadgeTextWidth(value, fontSize, compactText);
   const valueRightInset = outerPadding;
-  const valueAvailableWidth = Math.max(0, width - valueX - valueRightInset);
+  const valueAvailableWidth =
+    contentLayout === 'stacked'
+      ? Math.max(0, width - outerPadding * 2)
+      : Math.max(0, width - valueX - valueRightInset);
   const valueTextLength =
     compactText && valueTextWidth > valueAvailableWidth
       ? ` textLength="${valueAvailableWidth}" lengthAdjust="spacingAndGlyphs"`
@@ -2681,7 +3176,6 @@ const buildBadgeSvg = ({
     ? `'Noto Sans','DejaVu Sans','Arial Narrow','Liberation Sans Narrow','Nimbus Sans Narrow','Roboto Condensed',Arial,sans-serif`
     : `'Noto Sans','DejaVu Sans',Arial,sans-serif`;
   const valueLetterSpacing = compactText ? ' letter-spacing="-0.04em"' : '';
-  const iconY = Math.round((height - iconSize) / 2);
   const iconShape =
     ratingStyle === 'plain'
       ? ''
@@ -2705,7 +3199,7 @@ const buildBadgeSvg = ({
   const outerRect =
     ratingStyle === 'plain'
       ? ''
-      : `<rect x="0.75" y="0.75" width="${Math.max(0, width - 1.5)}" height="${Math.max(0, height - 1.5)}" rx="${radius}" fill="${ratingStyle === 'square' ? 'rgb(5,5,5)' : 'rgb(17,24,39)'}" fill-opacity="${ratingStyle === 'square' ? '0.94' : '0.70'}" stroke="${ratingStyle === 'square' ? accentColor : 'rgba(255,255,255,0.30)'}" stroke-width="${ratingStyle === 'square' ? '1.5' : '1'}" />`;
+      : `<rect x="0.75" y="0.75" width="${Math.max(0, width - 1.5)}" height="${Math.max(0, height - 1.5)}" rx="${outerRadius}" fill="${ratingStyle === 'square' ? 'rgb(5,5,5)' : 'rgb(17,24,39)'}" fill-opacity="${ratingStyle === 'square' ? '0.94' : '0.70'}" stroke="${ratingStyle === 'square' ? accentColor : accentColor}" stroke-opacity="${ratingStyle === 'square' ? '1' : '0.58'}" stroke-width="${ratingStyle === 'square' ? '1.5' : '1'}" />`;
   const monogramFill = ratingStyle === 'glass' ? 'white' : accentColor;
   const textShadowFilter =
     ratingStyle === 'plain'
@@ -2724,13 +3218,14 @@ const buildBadgeSvg = ({
   const valueFilter = ratingStyle === 'plain' ? ' filter="url(#text-shadow)"' : '';
   const valueNumericStyle =
     ' style="font-variant-numeric: tabular-nums lining-nums; font-feature-settings: \'tnum\' 1, \'lnum\' 1;"';
+  const valueTextAnchor = contentLayout === 'stacked' ? ' text-anchor="middle"' : '';
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
 ${textShadowFilter}
 ${outerRect}
 ${iconShape}
 ${iconImage}
 ${monogramText}
-<text x="${valueX}" y="${valueY}" font-family="${valueFontFamily}" font-size="${fontSize}" font-weight="800" fill="white"${valueFilter}${valueLetterSpacing}${valueTextLength}${valueNumericStyle}>${escapeXml(value)}</text>
+<text x="${valueX}" y="${valueY}" font-family="${valueFontFamily}" font-size="${fontSize}" font-weight="800" fill="white"${valueFilter}${valueLetterSpacing}${valueTextLength}${valueNumericStyle}${valueTextAnchor}>${escapeXml(value)}</text>
 </svg>`;
 };
 
@@ -2777,7 +3272,28 @@ const renderWithSharp = async (
       }
     }
 
-    const badgeHeight = input.badgeIconSize + input.badgePaddingY * 2;
+    const badgeHeight = estimateBadgeHeight(
+      input.badgeFontSize,
+      input.badgePaddingX,
+      input.badgePaddingY,
+      input.badgeIconSize,
+      'standard'
+    );
+    const verticalBadgeHeight = estimateBadgeHeight(
+      input.badgeFontSize,
+      input.badgePaddingX,
+      input.badgePaddingY,
+      input.badgeIconSize,
+      input.verticalBadgeContent
+    );
+    const posterReferenceBadgeHeight =
+      input.imageType === 'poster' ? input.posterReferenceBadgeHeight ?? badgeHeight : badgeHeight;
+    const posterReferenceVerticalBadgeHeight =
+      input.imageType === 'poster'
+        ? input.posterReferenceVerticalBadgeHeight ?? verticalBadgeHeight
+        : verticalBadgeHeight;
+    const posterReferenceBadgeGap =
+      input.imageType === 'poster' ? input.posterReferenceBadgeGap ?? input.badgeGap : input.badgeGap;
     const compactPosterRowText =
       input.imageType === 'poster' &&
       input.posterRatingsLayout !== 'left' &&
@@ -2806,6 +3322,15 @@ const renderWithSharp = async (
     const posterTitleSpec =
       input.imageType === 'poster' && input.posterTitleText
         ? buildPosterTitleSvg(input.posterTitleText, posterRowRegionWidth)
+        : null;
+    const thumbnailFallbackTitleSpec =
+      input.imageType === 'thumbnail' &&
+        (input.thumbnailFallbackEpisodeCode || input.thumbnailFallbackEpisodeText)
+        ? buildThumbnailFallbackTitleSvg(
+          input.thumbnailFallbackEpisodeCode || '',
+          input.thumbnailFallbackEpisodeText || '',
+          Math.min(Math.round(input.outputWidth * 0.62), input.outputWidth - 32)
+        )
         : null;
     let posterLogoSpec: { buffer: Buffer; width: number; height: number } | null = null;
     if (input.imageType === 'poster' && input.posterLogoUrl) {
@@ -2844,9 +3369,20 @@ const renderWithSharp = async (
         splitAcrossHalves?: boolean;
         spreadAcrossThirds?: boolean;
         preserveBadgeSize?: boolean;
+        contentLayoutOverride?: 'standard' | 'stacked';
+        compactTextOverride?: boolean;
       }
     ) => {
       if (rowBadges.length === 0) return;
+      const rowContentLayout = options?.contentLayoutOverride ?? input.verticalBadgeContent;
+      const rowCompactText = options?.compactTextOverride ?? compactPosterRowText;
+      const rowBadgeHeight = estimateBadgeHeight(
+        input.badgeFontSize,
+        input.badgePaddingX,
+        input.badgePaddingY,
+        input.badgeIconSize,
+        rowContentLayout
+      );
       const rowEntries = rowBadges.map((badge) => {
         const badgeWidth = estimateBadgeWidth(
           badge.value,
@@ -2854,7 +3390,8 @@ const renderWithSharp = async (
           input.badgePaddingX,
           input.badgeIconSize,
           input.badgeGap,
-          compactPosterRowText
+          rowCompactText,
+          rowContentLayout
         );
         const minBadgeWidth = getMinimumCompressedBadgeWidth(
           badge.value,
@@ -2862,7 +3399,8 @@ const renderWithSharp = async (
           input.badgePaddingX,
           input.badgeIconSize,
           input.badgeGap,
-          compactPosterRowText
+          rowCompactText,
+          rowContentLayout
         );
         return { badge, badgeWidth, minBadgeWidth };
       });
@@ -2930,7 +3468,7 @@ const renderWithSharp = async (
         );
         const badgeSvg = buildBadgeSvg({
           width: entry.badgeWidth,
-          height: badgeHeight,
+          height: rowBadgeHeight,
           iconSize: input.badgeIconSize,
           fontSize: input.badgeFontSize,
           paddingX: input.badgePaddingX,
@@ -2941,7 +3479,8 @@ const renderWithSharp = async (
           iconCornerRadius: entry.badge.iconCornerRadius,
           value: entry.badge.value,
           ratingStyle: input.ratingStyle,
-          compactText: compactPosterRowText,
+          compactText: rowCompactText,
+          contentLayout: rowContentLayout,
         });
         overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: clampedX });
         return;
@@ -2974,7 +3513,7 @@ const renderWithSharp = async (
               );
               const badgeSvg = buildBadgeSvg({
                 width: entry.badgeWidth,
-                height: badgeHeight,
+                height: rowBadgeHeight,
                 iconSize: input.badgeIconSize,
                 fontSize: input.badgeFontSize,
                 paddingX: input.badgePaddingX,
@@ -2985,7 +3524,8 @@ const renderWithSharp = async (
                 iconCornerRadius: entry.badge.iconCornerRadius,
                 value: entry.badge.value,
                 ratingStyle: input.ratingStyle,
-                compactText: compactPosterRowText,
+                compactText: rowCompactText,
+                contentLayout: rowContentLayout,
               });
               overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: positions[index] });
             }
@@ -3010,7 +3550,7 @@ const renderWithSharp = async (
             );
             const badgeSvg = buildBadgeSvg({
               width: entry.badgeWidth,
-              height: badgeHeight,
+              height: rowBadgeHeight,
               iconSize: input.badgeIconSize,
               fontSize: input.badgeFontSize,
               paddingX: input.badgePaddingX,
@@ -3021,7 +3561,8 @@ const renderWithSharp = async (
               iconCornerRadius: entry.badge.iconCornerRadius,
               value: entry.badge.value,
               ratingStyle: input.ratingStyle,
-              compactText: compactPosterRowText,
+              compactText: rowCompactText,
+              contentLayout: rowContentLayout,
             });
             overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: positions[index] });
           }
@@ -3058,7 +3599,7 @@ const renderWithSharp = async (
         );
         const badgeSvg = buildBadgeSvg({
           width: entry.badgeWidth,
-          height: badgeHeight,
+          height: rowBadgeHeight,
           iconSize: input.badgeIconSize,
           fontSize: input.badgeFontSize,
           paddingX: input.badgePaddingX,
@@ -3069,7 +3610,8 @@ const renderWithSharp = async (
           iconCornerRadius: entry.badge.iconCornerRadius,
           value: entry.badge.value,
           ratingStyle: input.ratingStyle,
-          compactText: compactPosterRowText,
+          compactText: rowCompactText,
+          contentLayout: rowContentLayout,
         });
         overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: rowX });
         rowX += entry.badgeWidth + rowGap;
@@ -3091,16 +3633,21 @@ const renderWithSharp = async (
           }
           : null;
       if (!overlay) return;
-      const overlayGap = Math.max(8, Math.round(input.badgeGap * 0.9));
-      let overlayY = Math.round(bottomRowY - overlayGap - overlay.height);
+      const overlayGap = Math.max(8, Math.round(posterReferenceBadgeGap * 0.9));
+      const stableBottomAnchorY = Math.max(
+        input.badgeTopOffset,
+        input.outputHeight - input.badgeBottomOffset - posterReferenceBadgeHeight
+      );
+      const overlayAnchorY = input.bottomBadges.length > 0 ? bottomRowY : stableBottomAnchorY;
+      let overlayY = Math.round(overlayAnchorY - overlayGap - overlay.height);
       const topRowBottom =
         input.topBadges.length > 0
-          ? input.badgeTopOffset + badgeHeight + input.badgeGap
+          ? input.badgeTopOffset + Math.max(badgeHeight, posterReferenceBadgeHeight) + posterReferenceBadgeGap
           : input.badgeTopOffset;
       if (overlayY < topRowBottom) {
         overlayY = topRowBottom;
       }
-      if (overlayY + overlay.height + overlayGap > bottomRowY) {
+      if (overlayY + overlay.height + overlayGap > overlayAnchorY) {
         return;
       }
       const overlayX = Math.max(
@@ -3108,6 +3655,132 @@ const renderWithSharp = async (
         Math.round((input.outputWidth - overlay.width) / 2)
       );
       overlays.push({ input: overlay.buffer, top: overlayY, left: overlayX });
+    };
+    const composeThumbnailFallbackOverlay = () => {
+      if (input.imageType !== 'thumbnail' || !thumbnailFallbackTitleSpec) return;
+      const bottomInset = Math.max(16, input.badgeBottomOffset);
+      const leftInset = 16;
+      const overlayX = Math.max(
+        leftInset,
+        Math.min(leftInset, Math.max(leftInset, input.outputWidth - thumbnailFallbackTitleSpec.width - leftInset))
+      );
+      const overlayY = Math.max(
+        16,
+        input.outputHeight - thumbnailFallbackTitleSpec.height - bottomInset
+      );
+      overlays.push({
+        input: Buffer.from(thumbnailFallbackTitleSpec.svg),
+        top: overlayY,
+        left: overlayX,
+      });
+    };
+    const composePosterBadgeAt = (
+      badge: RatingBadge,
+      left: number,
+      top: number,
+      maxBadgeWidth: number,
+      contentLayout: 'standard' | 'stacked' = input.verticalBadgeContent
+    ) => {
+      const badgeHeightForLayout = estimateBadgeHeight(
+        input.badgeFontSize,
+        input.badgePaddingX,
+        input.badgePaddingY,
+        input.badgeIconSize,
+        contentLayout
+      );
+      const estimatedWidth = estimateBadgeWidth(
+        badge.value,
+        input.badgeFontSize,
+        input.badgePaddingX,
+        input.badgeIconSize,
+        input.badgeGap,
+        false,
+        contentLayout
+      );
+      const badgeWidth = Math.min(estimatedWidth, maxBadgeWidth);
+      const monogram = buildProviderMonogram(
+        badge.label || String(badge.key).toUpperCase()
+      );
+      const badgeSvg = buildBadgeSvg({
+        width: badgeWidth,
+        height: badgeHeightForLayout,
+        iconSize: input.badgeIconSize,
+        fontSize: input.badgeFontSize,
+        paddingX: input.badgePaddingX,
+        gap: input.badgeGap,
+        accentColor: badge.accentColor,
+        monogram,
+        iconDataUri: iconByProvider.get(badge.key) || null,
+        iconCornerRadius: badge.iconCornerRadius,
+        value: badge.value,
+        ratingStyle: input.ratingStyle,
+        contentLayout,
+      });
+      overlays.push({ input: Buffer.from(badgeSvg), top, left });
+      return { width: badgeWidth, height: badgeHeightForLayout };
+    };
+    const composePosterCenteredTopBadge = (
+      badge: RatingBadge,
+      sizeMode: 'default' | 'top' = 'default'
+    ) => {
+      if (sizeMode === 'top') {
+        const topIconSize = 46;
+        const topFontSize = 35;
+        const topPaddingX = 13;
+        const topPaddingY = 8;
+        const topGap = 9;
+        const topBadgeHeight = estimateBadgeHeight(
+          topFontSize,
+          topPaddingX,
+          topPaddingY,
+          topIconSize,
+          'standard'
+        );
+        const estimatedWidth = estimateBadgeWidth(
+          badge.value,
+          topFontSize,
+          topPaddingX,
+          topIconSize,
+          topGap,
+          true,
+          'standard'
+        );
+        const badgeWidth = Math.min(estimatedWidth, Math.max(0, posterRowRegionWidth - 24));
+        const rowX = Math.max(
+          input.posterRowHorizontalInset,
+          input.posterRowHorizontalInset + Math.floor((posterRowRegionWidth - badgeWidth) / 2)
+        );
+        const monogram = buildProviderMonogram(
+          badge.label || String(badge.key).toUpperCase()
+        );
+        const badgeSvg = buildBadgeSvg({
+          width: badgeWidth,
+          height: topBadgeHeight,
+          iconSize: topIconSize,
+          fontSize: topFontSize,
+          paddingX: topPaddingX,
+          gap: topGap,
+          accentColor: badge.accentColor,
+          monogram,
+          iconDataUri: iconByProvider.get(badge.key) || null,
+          iconCornerRadius: badge.iconCornerRadius,
+          value: badge.value,
+          ratingStyle: input.ratingStyle,
+          compactText: true,
+          contentLayout: 'standard',
+        });
+        overlays.push({ input: Buffer.from(badgeSvg), top: input.badgeTopOffset, left: rowX });
+        return;
+      }
+
+      composeBadgeRow([badge], input.badgeTopOffset, {
+        regionLeft: input.posterRowHorizontalInset,
+        regionWidth: posterRowRegionWidth,
+        align: 'center',
+        preserveBadgeSize: true,
+        contentLayoutOverride: 'standard',
+        compactTextOverride: true,
+      });
     };
     const composeEdgeAlignedPosterBadge = (
       badge: RatingBadge,
@@ -3120,31 +3793,16 @@ const renderWithSharp = async (
         input.badgeFontSize,
         input.badgePaddingX,
         input.badgeIconSize,
-        input.badgeGap
+        input.badgeGap,
+        false,
+        input.verticalBadgeContent
       );
       const badgeWidth = Math.min(estimatedWidth, maxBadgeWidth);
       const rowX =
         side === 'left'
           ? 12
           : Math.max(12, input.outputWidth - badgeWidth - 12);
-      const monogram = buildProviderMonogram(
-        badge.label || String(badge.key).toUpperCase()
-      );
-      const badgeSvg = buildBadgeSvg({
-        width: badgeWidth,
-        height: badgeHeight,
-        iconSize: input.badgeIconSize,
-        fontSize: input.badgeFontSize,
-        paddingX: input.badgePaddingX,
-        gap: input.badgeGap,
-        accentColor: badge.accentColor,
-        monogram,
-        iconDataUri: iconByProvider.get(badge.key) || null,
-        iconCornerRadius: badge.iconCornerRadius,
-        value: badge.value,
-        ratingStyle: input.ratingStyle,
-      });
-      overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: rowX });
+      composePosterBadgeAt(badge, rowX, rowY, maxBadgeWidth, input.verticalBadgeContent);
     };
     const composeBadgeColumn = (
       columnBadges: RatingBadge[],
@@ -3158,12 +3816,12 @@ const renderWithSharp = async (
         typeof startY === 'number'
           ? Math.max(input.badgeTopOffset, startY)
           : origin === 'bottom'
-            ? Math.max(input.badgeTopOffset, input.outputHeight - input.badgeBottomOffset - badgeHeight)
+            ? Math.max(input.badgeTopOffset, input.outputHeight - input.badgeBottomOffset - verticalBadgeHeight)
             : input.badgeTopOffset;
       for (let index = 0; index < columnBadges.length; index += 1) {
         const badge = columnBadges[index];
         composeEdgeAlignedPosterBadge(badge, rowY, side, maxBadgeWidth);
-        rowY += origin === 'bottom' ? -(badgeHeight + input.badgeGap) : badgeHeight + input.badgeGap;
+        rowY += origin === 'bottom' ? -(verticalBadgeHeight + input.badgeGap) : verticalBadgeHeight + input.badgeGap;
       }
     };
     const composeBackdropBadgeColumn = (
@@ -3174,7 +3832,7 @@ const renderWithSharp = async (
     ) => {
       if (columnBadges.length === 0) return;
       const columnHeight =
-        columnBadges.length * badgeHeight + Math.max(0, columnBadges.length - 1) * input.badgeGap;
+        columnBadges.length * verticalBadgeHeight + Math.max(0, columnBadges.length - 1) * input.badgeGap;
       let rowY =
         typeof startY === 'number'
           ? Math.max(input.badgeTopOffset, startY)
@@ -3194,7 +3852,9 @@ const renderWithSharp = async (
           input.badgeFontSize,
           input.badgePaddingX,
           input.badgeIconSize,
-          input.badgeGap
+          input.badgeGap,
+          false,
+          input.verticalBadgeContent
         );
         const badgeWidth = Math.min(estimatedWidth, maxBadgeWidth);
         const rowX =
@@ -3208,7 +3868,7 @@ const renderWithSharp = async (
         );
         const badgeSvg = buildBadgeSvg({
           width: badgeWidth,
-          height: badgeHeight,
+          height: verticalBadgeHeight,
           iconSize: input.badgeIconSize,
           fontSize: input.badgeFontSize,
           paddingX: input.badgePaddingX,
@@ -3219,10 +3879,98 @@ const renderWithSharp = async (
           iconCornerRadius: badge.iconCornerRadius,
           value: badge.value,
           ratingStyle: input.ratingStyle,
+          contentLayout: input.verticalBadgeContent,
         });
         overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: rowX });
-        rowY += badgeHeight + input.badgeGap;
+        rowY += verticalBadgeHeight + input.badgeGap;
       }
+    };
+    const composeBackdropBadgeColumns = (
+      columns: RatingBadge[][],
+      placement: BackdropBadgePlacement
+    ) => {
+      const usableColumns = columns.filter((column) => column.length > 0);
+      if (usableColumns.length === 0) return false;
+      const estimatedColumns = usableColumns.map((columnBadges) => {
+        const widths = columnBadges.map((badge) =>
+          estimateBadgeWidth(
+            badge.value,
+            input.badgeFontSize,
+            input.badgePaddingX,
+            input.badgeIconSize,
+            input.badgeGap,
+            false,
+            input.verticalBadgeContent
+          )
+        );
+        return {
+          badges: columnBadges,
+          badgeWidths: widths,
+          maxWidth: Math.max(0, ...widths),
+          height:
+            columnBadges.length * verticalBadgeHeight +
+            Math.max(0, columnBadges.length - 1) * input.badgeGap,
+        };
+      });
+      const columnGap = Math.max(12, input.badgeGap);
+      const totalWidth =
+        estimatedColumns.reduce((sum, column) => sum + column.maxWidth, 0) +
+        Math.max(0, estimatedColumns.length - 1) * columnGap;
+      const regionLeft = placement.left;
+      const regionRight = placement.left + placement.width;
+      if (totalWidth > placement.width) return false;
+
+      const startX =
+        placement.align === 'right'
+          ? regionRight - totalWidth
+          : placement.align === 'center'
+            ? regionLeft + Math.floor((placement.width - totalWidth) / 2)
+            : regionLeft;
+      if (startX < regionLeft || startX + totalWidth > regionRight) return false;
+
+      const tallestHeight = estimatedColumns.reduce(
+        (maxHeight, column) => Math.max(maxHeight, column.height),
+        0
+      );
+      const startY =
+        placement.vertical === 'bottom'
+          ? Math.max(input.badgeTopOffset, input.outputHeight - input.badgeBottomOffset - tallestHeight)
+          : placement.vertical === 'center'
+            ? Math.max(input.badgeTopOffset, Math.round((input.outputHeight - tallestHeight) / 2))
+            : input.badgeTopOffset;
+
+      let columnX = startX;
+      for (const column of estimatedColumns) {
+        let rowY = startY;
+        for (let index = 0; index < column.badges.length; index += 1) {
+          const badge = column.badges[index];
+          const badgeWidth = column.badgeWidths[index];
+          const rowX = columnX + Math.floor((column.maxWidth - badgeWidth) / 2);
+          const monogram = buildProviderMonogram(
+            badge.label || String(badge.key).toUpperCase()
+          );
+          const badgeSvg = buildBadgeSvg({
+            width: badgeWidth,
+            height: verticalBadgeHeight,
+            iconSize: input.badgeIconSize,
+            fontSize: input.badgeFontSize,
+            paddingX: input.badgePaddingX,
+            gap: input.badgeGap,
+            accentColor: badge.accentColor,
+            monogram,
+            iconDataUri: iconByProvider.get(badge.key) || null,
+            iconCornerRadius: badge.iconCornerRadius,
+            value: badge.value,
+            ratingStyle: input.ratingStyle,
+            contentLayout: input.verticalBadgeContent,
+          });
+          overlays.push({ input: Buffer.from(badgeSvg), top: rowY, left: rowX });
+          rowY += verticalBadgeHeight + input.badgeGap;
+        }
+        columnX += column.maxWidth + columnGap;
+      }
+
+      return true;
     };
     const composeQualityBadgeColumn = (
       columnBadges: RatingBadge[],
@@ -3230,7 +3978,10 @@ const renderWithSharp = async (
       side: QualityBadgesSide
     ) => {
       if (columnBadges.length === 0) return;
-      const qualityHeight = Math.max(44, Math.round(badgeHeight * 1.25));
+      const qualityBaseHeight =
+        input.imageType === 'poster' ? posterReferenceBadgeHeight : badgeHeight;
+      const qualityGap = input.imageType === 'poster' ? posterReferenceBadgeGap : input.badgeGap;
+      const qualityHeight = Math.max(44, Math.round(qualityBaseHeight * 1.25));
       const uniformBadgeWidth = Math.min(
         Math.max(72, Math.round(qualityHeight * 1.75)),
         Math.max(72, input.outputWidth - 24)
@@ -3253,7 +4004,7 @@ const renderWithSharp = async (
             ? Math.max(12, input.outputWidth - badgeWidth - 12)
             : 12;
         overlays.push({ input: Buffer.from(spec.svg), top: rowY, left: rowX });
-        rowY += badgeHeightForRow + input.badgeGap;
+        rowY += badgeHeightForRow + qualityGap;
       }
     };
     const composeQualityBadgeRow = (
@@ -3263,12 +4014,15 @@ const renderWithSharp = async (
     ) => {
       if (rowBadges.length === 0) return;
       const maxRowWidth = Math.max(0, input.outputWidth - 24);
-      let qualityHeight = Math.max(36, Math.round(baseHeight ?? badgeHeight * 1.05));
+      const qualityBaseHeight =
+        input.imageType === 'poster' ? posterReferenceBadgeHeight : badgeHeight;
+      const qualityBaseGap = input.imageType === 'poster' ? posterReferenceBadgeGap : input.badgeGap;
+      let qualityHeight = Math.max(36, Math.round(baseHeight ?? qualityBaseHeight * 1.05));
       let badgeWidth = Math.min(
         Math.max(64, Math.round(qualityHeight * 1.75)),
         Math.max(64, input.outputWidth - 24)
       );
-      let rowGap = input.badgeGap;
+      let rowGap = qualityBaseGap;
       let rowWidth = rowBadges.length * badgeWidth + Math.max(0, rowBadges.length - 1) * rowGap;
       if (rowWidth > maxRowWidth && rowBadges.length > 1) {
         const ratio = Math.max(0.45, maxRowWidth / rowWidth);
@@ -3356,13 +4110,35 @@ const renderWithSharp = async (
         );
         if (backdropPlacement.stack === 'column') {
           const maxBadgeWidth = Math.max(180, Math.floor(backdropPlacement.width - 24));
-          const columnBadges =
-            input.rightBadges.length > 0
-              ? input.rightBadges
-              : input.leftBadges.length > 0
-                ? input.leftBadges
-                : input.badges;
-          composeBackdropBadgeColumn(columnBadges, backdropPlacement, maxBadgeWidth);
+          const backdropColumns =
+            input.backdropColumns && input.backdropColumns.length > 0
+              ? input.backdropColumns.filter((column) => column.length > 0)
+              : [];
+          const hasMultipleColumns = backdropColumns.length > 1;
+          if (
+            hasMultipleColumns &&
+            !composeBackdropBadgeColumns(backdropColumns, backdropPlacement)
+          ) {
+            const fallbackColumnBadges =
+              backdropColumns[0]?.length
+                ? backdropColumns[0]
+                : input.rightBadges.length > 0
+                  ? input.rightBadges
+                  : input.leftBadges.length > 0
+                    ? input.leftBadges
+                    : input.badges;
+            composeBackdropBadgeColumn(fallbackColumnBadges, backdropPlacement, maxBadgeWidth);
+          } else if (!hasMultipleColumns) {
+            const columnBadges =
+              backdropColumns[0]?.length
+                ? backdropColumns[0]
+                : input.rightBadges.length > 0
+                  ? input.rightBadges
+                  : input.leftBadges.length > 0
+                    ? input.leftBadges
+                  : input.badges;
+            composeBackdropBadgeColumn(columnBadges, backdropPlacement, maxBadgeWidth);
+          }
         } else {
           const backdropRows =
             input.backdropRows && input.backdropRows.length > 0
@@ -3385,6 +4161,7 @@ const renderWithSharp = async (
             rowY += badgeHeight + input.badgeGap;
           }
         }
+        composeThumbnailFallbackOverlay();
       } else if (input.imageType === 'poster') {
         const bottomRowY = Math.max(
           input.badgeTopOffset,
@@ -3407,30 +4184,108 @@ const renderWithSharp = async (
           const remainingRightBadges = hasThreeBadgeTopRow ? input.rightBadges.slice(1) : input.rightBadges;
 
           if (hasThreeBadgeTopRow) {
-            composeBadgeRow(
-              [input.leftBadges[0], input.topBadges[0], input.rightBadges[0]],
-              input.badgeTopOffset,
-              {
-                regionLeft: 0,
-                regionWidth: input.outputWidth,
-                spreadAcrossThirds: true,
+            if (input.verticalBadgeContent === 'stacked') {
+              const edgeInset = 12;
+              const leftBadge = input.leftBadges[0];
+              const centerBadge = input.topBadges[0];
+              const rightBadge = input.rightBadges[0];
+              const leftEstimate = Math.min(
+                estimateBadgeWidth(
+                  leftBadge.value,
+                  input.badgeFontSize,
+                  input.badgePaddingX,
+                  input.badgeIconSize,
+                  input.badgeGap,
+                  false,
+                  'stacked'
+                ),
+                maxBadgeWidth
+              );
+              const rightEstimate = Math.min(
+                estimateBadgeWidth(
+                  rightBadge.value,
+                  input.badgeFontSize,
+                  input.badgePaddingX,
+                  input.badgeIconSize,
+                  input.badgeGap,
+                  false,
+                  'stacked'
+                ),
+                maxBadgeWidth
+              );
+              const leftX = edgeInset;
+              const topCenterIconSize = 46;
+              const topCenterFontSize = 35;
+              const topCenterPaddingX = 13;
+              const topCenterGap = 9;
+              const centerMaxWidth = Math.max(0, posterRowRegionWidth - 24);
+              const centeredHorizontalWidth = Math.min(
+                estimateBadgeWidth(
+                  centerBadge.value,
+                  topCenterFontSize,
+                  topCenterPaddingX,
+                  topCenterIconSize,
+                  topCenterGap,
+                  true,
+                  'standard'
+                ),
+                centerMaxWidth
+              );
+              const centerIdealX =
+                input.posterRowHorizontalInset +
+                Math.floor((posterRowRegionWidth - centeredHorizontalWidth) / 2);
+              const centerX = Math.max(
+                input.posterRowHorizontalInset,
+                Math.min(
+                  centerIdealX,
+                  input.posterRowHorizontalInset + posterRowRegionWidth - centeredHorizontalWidth
+                )
+              );
+              const rightX = Math.max(edgeInset, input.outputWidth - rightEstimate - edgeInset);
+              const overlaps =
+                leftX + leftEstimate + input.badgeGap > centerX ||
+                centerX + centeredHorizontalWidth + input.badgeGap > rightX;
+              if (!overlaps) {
+                composePosterBadgeAt(leftBadge, leftX, input.badgeTopOffset, maxBadgeWidth, 'stacked');
+                composePosterCenteredTopBadge(centerBadge, 'top');
+                composePosterBadgeAt(rightBadge, rightX, input.badgeTopOffset, maxBadgeWidth, 'stacked');
+              } else {
+                composeBadgeRow(
+                  [leftBadge, centerBadge, rightBadge],
+                  input.badgeTopOffset,
+                  {
+                    regionLeft: 0,
+                    regionWidth: input.outputWidth,
+                    spreadAcrossThirds: true,
+                    preserveBadgeSize: true,
+                  }
+                );
               }
-            );
+            } else {
+              composeBadgeRow(
+                [input.leftBadges[0], input.topBadges[0], input.rightBadges[0]],
+                input.badgeTopOffset,
+                {
+                  regionLeft: 0,
+                  regionWidth: input.outputWidth,
+                  spreadAcrossThirds: true,
+                  preserveBadgeSize: true,
+                }
+              );
+            }
           } else if (input.topBadges.length > 0) {
-            composeBadgeRow(input.topBadges, input.badgeTopOffset, {
-              regionLeft: input.posterRowHorizontalInset,
-              regionWidth: posterRowRegionWidth,
-              align: 'center',
-            });
+            for (const badge of input.topBadges) {
+              composePosterCenteredTopBadge(badge);
+            }
           }
 
           const sideStartY =
             input.topBadges.length > 0
-              ? input.badgeTopOffset + badgeHeight + input.badgeGap
+              ? input.badgeTopOffset + verticalBadgeHeight + input.badgeGap
               : input.badgeTopOffset;
           if (remainingLeftBadges.length === remainingRightBadges.length) {
             for (let index = 0; index < remainingLeftBadges.length; index += 1) {
-              const rowY = sideStartY + index * (badgeHeight + input.badgeGap);
+              const rowY = sideStartY + index * (verticalBadgeHeight + input.badgeGap);
               composeEdgeAlignedPosterBadge(remainingLeftBadges[index], rowY, 'left', maxBadgeWidth);
               composeEdgeAlignedPosterBadge(remainingRightBadges[index], rowY, 'right', maxBadgeWidth);
             }
@@ -3498,12 +4353,15 @@ const renderWithSharp = async (
         if (shouldTopAlignQuality) {
           qualityStartY = input.badgeTopOffset;
         } else if (input.topBadges.length > 0) {
-          const belowTop = input.badgeTopOffset + badgeHeight + input.badgeGap;
+          const belowTop =
+            input.badgeTopOffset +
+            Math.max(verticalBadgeHeight, posterReferenceVerticalBadgeHeight) +
+            Math.max(input.badgeGap, posterReferenceBadgeGap);
           qualityStartY = Math.max(qualityStartY, belowTop);
         } else {
           const sideBadges = qualityPlacement === 'right' ? input.rightBadges : input.leftBadges;
           if (sideBadges.length > 0) {
-            const sideColumnHeight = measureBadgeColumnHeight(sideBadges, metrics);
+            const sideColumnHeight = measureBadgeColumnHeight(sideBadges, metrics, input.verticalBadgeContent);
             if (sideColumnHeight > 0) {
               const belowSide = input.badgeTopOffset + sideColumnHeight + input.badgeGap;
               qualityStartY = Math.max(qualityStartY, belowSide);
@@ -3561,32 +4419,104 @@ const renderWithSharp = async (
           input.backdropRows && input.backdropRows.length > 0
             ? input.backdropRows
             : [input.topBadges, input.bottomBadges].filter((row) => row.length > 0);
-        const ratingBlockWidth = backdropRows.reduce((maxWidth, row) => {
-          const rowWidth = Math.min(measureBadgeRowWidth(row, metrics), effectiveMaxWidth);
-          return Math.max(maxWidth, rowWidth);
-        }, 0);
+        const verticalBackdropColumns =
+          backdropPlacement.stack === 'column'
+            ? (input.backdropColumns && input.backdropColumns.length > 0
+                ? input.backdropColumns
+                : [input.leftBadges, input.rightBadges].filter((column) => column.length > 0))
+            : [];
         const ratingCenterX = backdropPlacement.left + backdropPlacement.width / 2;
-        const ratingLeft = ratingCenterX - ratingBlockWidth / 2;
-        const ratingRight = ratingCenterX + ratingBlockWidth / 2;
-        const ratingRows =
-          input.backdropRatingsLayout === 'right-vertical'
-            ? 0
-            : input.backdropRows && input.backdropRows.length > 0
+        let ratingLeft = ratingCenterX;
+        let ratingRight = ratingCenterX;
+        let ratingBlockTop = startY;
+        let ratingBlockBottom = startY;
+        let ratingRows = 0;
+        if (backdropPlacement.stack === 'column' && verticalBackdropColumns.length > 0) {
+          const estimatedColumns = verticalBackdropColumns.map((columnBadges) => {
+            const maxWidth = columnBadges.reduce(
+              (columnMaxWidth, badge) =>
+                Math.max(
+                  columnMaxWidth,
+                  estimateBadgeWidth(
+                    badge.value,
+                    input.badgeFontSize,
+                    input.badgePaddingX,
+                    input.badgeIconSize,
+                    input.badgeGap,
+                    false,
+                    input.verticalBadgeContent
+                  )
+                ),
+              0
+            );
+            return {
+              maxWidth,
+              height: measureBadgeColumnHeight(columnBadges, metrics, input.verticalBadgeContent),
+            };
+          });
+          const ratingBlockWidth =
+            estimatedColumns.reduce((sum, column) => sum + column.maxWidth, 0) +
+            Math.max(0, estimatedColumns.length - 1) * Math.max(12, input.badgeGap);
+          const columnStartX =
+            backdropPlacement.align === 'right'
+              ? backdropPlacement.left + backdropPlacement.width - ratingBlockWidth
+              : backdropPlacement.align === 'center'
+                ? backdropPlacement.left + Math.floor((backdropPlacement.width - ratingBlockWidth) / 2)
+                : backdropPlacement.left;
+          const tallestHeight = estimatedColumns.reduce(
+            (maxHeight, column) => Math.max(maxHeight, column.height),
+            0
+          );
+          ratingLeft = columnStartX;
+          ratingRight = columnStartX + ratingBlockWidth;
+          ratingBlockTop =
+            backdropPlacement.vertical === 'bottom'
+              ? Math.max(input.badgeTopOffset, input.outputHeight - input.badgeBottomOffset - tallestHeight)
+              : backdropPlacement.vertical === 'center'
+                ? Math.max(input.badgeTopOffset, Math.round((input.outputHeight - tallestHeight) / 2))
+                : startY;
+          ratingBlockBottom = ratingBlockTop + tallestHeight;
+        } else {
+          const ratingBlockWidth = backdropRows.reduce((maxWidth, row) => {
+            const rowWidth = Math.min(measureBadgeRowWidth(row, metrics), effectiveMaxWidth);
+            return Math.max(maxWidth, rowWidth);
+          }, 0);
+          const totalRowsHeight =
+            backdropRows.length * badgeHeight + Math.max(0, backdropRows.length - 1) * input.badgeGap;
+          if (backdropPlacement.align === 'right') {
+            ratingRight = backdropPlacement.left + backdropPlacement.width;
+            ratingLeft = ratingRight - ratingBlockWidth;
+          } else if (backdropPlacement.align === 'left') {
+            ratingLeft = backdropPlacement.left;
+            ratingRight = ratingLeft + ratingBlockWidth;
+          } else {
+            ratingLeft = ratingCenterX - ratingBlockWidth / 2;
+            ratingRight = ratingCenterX + ratingBlockWidth / 2;
+          }
+          ratingRows =
+            input.backdropRows && input.backdropRows.length > 0
               ? input.backdropRows.length
               : (input.topBadges.length > 0 ? 1 : 0) + (input.bottomBadges.length > 0 ? 1 : 0);
-        const ratingBlockBottom =
-          ratingRows > 0
-            ? startY + ratingRows * badgeHeight + Math.max(0, ratingRows - 1) * input.badgeGap
-            : startY;
+          ratingBlockTop =
+            backdropPlacement.vertical === 'bottom'
+              ? Math.max(input.badgeTopOffset, input.outputHeight - input.badgeBottomOffset - totalRowsHeight)
+              : backdropPlacement.vertical === 'center'
+                ? Math.max(input.badgeTopOffset, Math.round((input.outputHeight - totalRowsHeight) / 2))
+                : startY;
+          ratingBlockBottom =
+            ratingRows > 0
+              ? ratingBlockTop + totalRowsHeight
+              : startY;
+        }
         const stackedQualityStartY =
           input.backdropRatingsLayout === 'center' || input.backdropRatingsLayout === 'right-vertical'
             ? startY
             : ratingBlockBottom + Math.max(input.badgeGap, Math.round(columnGap * 1.2));
-        const placeQualityLeftOfRatings = input.backdropRatingsLayout === 'right';
-        const qualityStartY = placeQualityLeftOfRatings ? startY : stackedQualityStartY;
+        const placeQualityLeftOfRatings = backdropPlacement.align === 'right';
+        let qualityStartY = placeQualityLeftOfRatings ? ratingBlockTop : stackedQualityStartY;
 
         if (rightColumn.length === 0) {
-          const singleX = Math.max(
+          let singleX = Math.max(
             12,
             Math.round(
               input.backdropRatingsLayout === 'center'
@@ -3598,8 +4528,14 @@ const renderWithSharp = async (
                     : ratingLeft - columnGap - uniformBadgeWidth
             )
           );
+          if (backdropPlacement.stack === 'column') {
+            qualityStartY = ratingBlockTop;
+            singleX = Math.max(12, Math.round(ratingLeft - columnGap - uniformBadgeWidth));
+          }
           const singleStartY =
-            input.backdropRatingsLayout === 'center' && ratingRows > 0
+            backdropPlacement.stack !== 'column' &&
+            input.backdropRatingsLayout === 'center' &&
+            ratingRows > 0
               ? startY + ratingRows * (badgeHeight + input.badgeGap)
               : qualityStartY;
           renderQualityBadgeColumnAt(
@@ -3612,7 +4548,11 @@ const renderWithSharp = async (
         } else {
           let leftX = 12;
           let rightX = Math.max(12, input.outputWidth - uniformBadgeWidth - 12);
-          if (placeQualityLeftOfRatings) {
+          if (backdropPlacement.stack === 'column') {
+            qualityStartY = ratingBlockTop;
+            rightX = Math.max(12, Math.round(ratingLeft - columnGap - uniformBadgeWidth));
+            leftX = Math.max(12, rightX - columnGap - uniformBadgeWidth);
+          } else if (placeQualityLeftOfRatings) {
             rightX = ratingLeft - columnGap - uniformBadgeWidth;
             leftX = rightX - columnGap - uniformBadgeWidth;
           } else {
@@ -3703,6 +4643,10 @@ export async function GET(
   const globalRatings = request.nextUrl.searchParams.get('ratings');
   const posterRatings = request.nextUrl.searchParams.get('posterRatings') ?? globalRatings;
   const backdropRatings = request.nextUrl.searchParams.get('backdropRatings') ?? globalRatings;
+  const thumbnailRatings =
+    request.nextUrl.searchParams.get('thumbnailRatings') ??
+    request.nextUrl.searchParams.get('backdropRatings') ??
+    globalRatings;
   const logoRatings = request.nextUrl.searchParams.get('logoRatings') ?? globalRatings;
   const imageTextParam =
     request.nextUrl.searchParams.get('imageText') || request.nextUrl.searchParams.get('posterText');
@@ -3713,6 +4657,27 @@ export async function GET(
   const thumbnailRatingsLayout = normalizeThumbnailRatingLayout(
     request.nextUrl.searchParams.get('thumbnailRatingsLayout')
   );
+  const posterVerticalBadgeContent = normalizeVerticalBadgeContent(
+    request.nextUrl.searchParams.get('posterVerticalBadgeContent') ||
+    request.nextUrl.searchParams.get('verticalBadgeContent')
+  );
+  const backdropVerticalBadgeContent = normalizeVerticalBadgeContent(
+    request.nextUrl.searchParams.get('backdropVerticalBadgeContent') ||
+    request.nextUrl.searchParams.get('verticalBadgeContent')
+  );
+  const thumbnailVerticalBadgeContent = normalizeVerticalBadgeContent(
+    request.nextUrl.searchParams.get('thumbnailVerticalBadgeContent') ||
+    request.nextUrl.searchParams.get('backdropVerticalBadgeContent') ||
+    request.nextUrl.searchParams.get('verticalBadgeContent')
+  );
+  const verticalBadgeContent =
+    imageType === 'poster'
+      ? posterVerticalBadgeContent
+      : imageType === 'thumbnail'
+        ? thumbnailVerticalBadgeContent
+        : imageType === 'backdrop'
+          ? backdropVerticalBadgeContent
+          : 'standard';
   const thumbnailSize = normalizeThumbnailSize(request.nextUrl.searchParams.get('thumbnailSize'));
   const globalStreamBadgesSetting = normalizeStreamBadgesSetting(request.nextUrl.searchParams.get('streamBadges'));
   const posterStreamBadgesSetting = normalizeStreamBadgesSetting(
@@ -3776,6 +4741,9 @@ export async function GET(
   let season: string | null = null;
   let episode: string | null = null;
   let isTmdb = false;
+  let isTvdb = false;
+  let isRealImdb = false;
+  let tvdbSeriesId: string | null = null;
   let isKitsu = false;
   let explicitTmdbMediaType: 'movie' | 'tv' | null = null;
   const hasNativeAnimeInput = ANIME_NATIVE_INPUT_ID_PREFIX_SET.has(idPrefix);
@@ -3798,10 +4766,23 @@ export async function GET(
       season = parts.length > 2 ? parts[2] : null;
       episode = parts.length > 3 ? parts[3] : null;
     }
+  } else if (idPrefix === 'tvdb') {
+    isTvdb = true;
+    mediaId = parts[1];
+    tvdbSeriesId = parts[1] || null;
+    season = parts.length > 2 ? parts[2] : null;
+    episode = parts.length > 3 ? parts[3] : null;
+  } else if (idPrefix === 'realimdb') {
+    isRealImdb = true;
+    mediaId = parts[1];
+    season = parts.length > 2 ? parts[2] : null;
+    episode = parts.length > 3 ? parts[3] : null;
   } else if (idPrefix === 'kitsu') {
     isKitsu = true;
-    mediaId = parts[1];
-    episode = parts.length > 2 ? parts[2] : null;
+    const parsedKitsu = parseKitsuInputParts(parts);
+    mediaId = parsedKitsu.mediaId;
+    season = parsedKitsu.season;
+    episode = parsedKitsu.episode;
   } else if (idPrefix === 'imdb' && inputAnimeMappingExternalId) {
     mediaId = inputAnimeMappingExternalId;
     season = parts.length > 2 ? parts[2] : null;
@@ -3815,8 +4796,11 @@ export async function GET(
     episode = parts.length > 2 ? parts[2] : null;
   }
 
-  const requestedImageLang = normalizeImageLanguage(lang) || FALLBACK_IMAGE_LANGUAGE;
+  const requestedImageLang = normalizeTmdbLanguageCode(lang) || FALLBACK_IMAGE_LANGUAGE;
   const includeImageLanguage = buildIncludeImageLanguage(requestedImageLang, FALLBACK_IMAGE_LANGUAGE);
+  const aiometadataEpisodeProvider = normalizeAiometadataEpisodeProvider(
+    request.nextUrl.searchParams.get('aiometadataProvider')
+  );
   const posterTextPreference: PosterTextPreference =
     imageText === 'clean' || imageText === 'alternative' || imageText === 'original'
       ? (imageText as PosterTextPreference)
@@ -3824,8 +4808,10 @@ export async function GET(
   const ratingsForType =
     imageType === 'poster'
       ? posterRatings
-      : imageType === 'backdrop' || imageType === 'thumbnail'
+      : imageType === 'backdrop'
         ? backdropRatings
+        : imageType === 'thumbnail'
+          ? thumbnailRatings
         : logoRatings;
   const thumbnailSupportedRatings = new Set<RatingPreference>(['tmdb', 'imdb']);
   const requestedRatingPreferences =
@@ -3860,6 +4846,8 @@ export async function GET(
     shouldApplyRatings || shouldApplyStreamBadges || (imageType === 'poster' && posterTextPreference === 'clean');
   const effectiveRatingPreferences = shouldApplyRatings ? Array.from(new Set<RatingPreference>(ratingPreferences)) : [];
   const selectedRatings = new Set<RatingPreference>(effectiveRatingPreferences);
+  const mdblistCacheSeed = buildMdbListCacheSeed(mdblistKey);
+  const simklCacheSeed = buildSecretCacheSeed('simkl', simklClientId);
   const renderSeedKey = [
     FINAL_IMAGE_RENDERER_CACHE_VERSION,
     imageType,
@@ -3876,8 +4864,11 @@ export async function GET(
     imageType !== 'logo' ? qualityBadgesStyle : '-',
     imageType === 'backdrop' ? backdropRatingsLayout : imageType === 'thumbnail' ? thumbnailRatingsLayout : '-',
     imageType === 'thumbnail' ? thumbnailSize : '-',
+    imageType === 'thumbnail' ? aiometadataEpisodeProvider || '-' : '-',
     ratingStyle,
     effectiveRatingPreferences.join(',') || 'none',
+    mdblistCacheSeed,
+    simklCacheSeed,
     streamBadgesCacheKeySeed,
     'v1', // Static version since we no longer have tokenConfigVersion
   ].join('|');
@@ -3941,8 +4932,94 @@ export async function GET(
             }
           }
         }
+      } else if (isTvdb) {
+        if (!mediaId) {
+          throw new HttpError('TVDB series ID is required', 400);
+        }
+
+        if (season && episode) {
+          const mappedEpisode = await resolveTvdbEpisodeToTmdb(mediaId, season, episode, tmdbKey, phases);
+          if (!mappedEpisode?.showId) {
+            throw new HttpError('TVDB aired-order episode not found on TMDB', 404);
+          }
+          mediaId = mappedEpisode.showId;
+          season = mappedEpisode.season;
+          episode = mappedEpisode.episode;
+        }
+
+        const tvFindResponse = await fetchJsonCached(
+          `tmdb:find:tvdb-series:${tvdbSeriesId}`,
+          `https://api.themoviedb.org/3/find/${tvdbSeriesId}?api_key=${tmdbKey}&external_source=tvdb_id`,
+          TMDB_CACHE_TTL_MS,
+          phases,
+          'tmdb'
+        );
+        const tvFindData = tvFindResponse.data || {};
+        const tvResult = tvFindData.tv_results?.[0] || null;
+        if (tvResult) {
+          media = tvResult;
+          mediaType = 'tv';
+        }
+      } else if (isRealImdb) {
+        if (!mediaId) {
+          throw new HttpError('IMDb ID is required', 400);
+        }
+
+        const imdbEpisode =
+          season && episode
+            ? findImdbEpisodeBySeriesSeasonEpisode(mediaId, Number(season), Number(episode))
+            : getImdbEpisodeFromDataset(mediaId);
+        const imdbLookupId = imdbEpisode?.imdbId || mediaId;
+
+        const findResponse = await fetchJsonCached(
+          `tmdb:find:realimdb:${imdbLookupId}`,
+          `https://api.themoviedb.org/3/find/${imdbLookupId}?api_key=${tmdbKey}&external_source=imdb_id`,
+          TMDB_CACHE_TTL_MS,
+          phases,
+          'tmdb'
+        );
+        const findData = findResponse.data || {};
+        const episodeResult = findData.tv_episode_results?.[0] || null;
+        if (episodeResult?.show_id) {
+          mediaId = String(episodeResult.show_id);
+          season = Number.isFinite(Number(episodeResult.season_number)) ? String(episodeResult.season_number) : season;
+          episode = Number.isFinite(Number(episodeResult.episode_number)) ? String(episodeResult.episode_number) : episode;
+          mappedImdbId = imdbEpisode?.seriesImdbId || mediaId;
+
+          const showResponse = await fetchJsonCached(
+            `tmdb:tv:${mediaId}`,
+            `https://api.themoviedb.org/3/tv/${mediaId}?api_key=${tmdbKey}`,
+            TMDB_CACHE_TTL_MS,
+            phases,
+            'tmdb'
+          );
+          if (showResponse.ok) {
+            media = showResponse.data;
+            mediaType = 'tv';
+          }
+        } else {
+          const tvResult = findData.tv_results?.[0] || null;
+          if (tvResult) {
+            media = tvResult;
+            mediaType = 'tv';
+            if (season && episode) {
+              const yearBucketMapping = await resolveTmdbEpisodeByYearBucket(
+                String(tvResult.id),
+                season,
+                episode,
+                tmdbKey,
+                phases
+              );
+              if (yearBucketMapping) {
+                mediaId = yearBucketMapping.showId;
+                season = yearBucketMapping.season;
+                episode = yearBucketMapping.episode;
+              }
+            }
+          }
+        }
       } else if (isKitsu) {
-        let mappingUrl = `https://animemapping.stremio.dpdns.org/kitsu/${mediaId}`;
+        let mappingUrl = `https://animemapping.realbestia.com/kitsu/${mediaId}`;
         if (episode) {
           mappingUrl += `?ep=${episode}`;
         }
@@ -3984,7 +5061,7 @@ export async function GET(
         if (mappingSubtype !== 'movie' && !season) {
           const seasonProbeResponse = await fetchJsonCached(
             `kitsu:mapping:${mediaId}:1`,
-            `https://animemapping.stremio.dpdns.org/kitsu/${mediaId}?ep=1`,
+            `https://animemapping.realbestia.com/kitsu/${mediaId}?ep=1`,
             KITSU_CACHE_TTL_MS,
             phases,
             'tmdb'
@@ -4121,17 +5198,75 @@ export async function GET(
           }
         }
       } else {
-        // 1. Find TMDB ID from IMDb ID
-        const findResponse = await fetchJsonCached(
-          `tmdb:find:${mediaId}`,
-          `https://api.themoviedb.org/3/find/${mediaId}?api_key=${tmdbKey}&external_source=imdb_id`,
-          TMDB_CACHE_TTL_MS,
-          phases,
-          'tmdb'
-        );
-        const findData = findResponse.data || {};
-        media = findData.movie_results?.[0] || findData.tv_results?.[0];
-        mediaType = findData.movie_results?.[0] ? 'movie' : 'tv';
+        // Aiometadata can emit IMDb series IDs paired with TVDB season/episode numbering.
+        // In that mode, bridge IMDb -> TMDB -> TVDB aired order before rendering thumbnails.
+        if (isImdbId(mediaId)) {
+          const rawImdbSeriesId = mediaId;
+          const shouldResolveTvdbAiredOrder =
+            imageType === 'thumbnail' &&
+            aiometadataEpisodeProvider === 'tvdb' &&
+            typeof season === 'string' &&
+            season.length > 0 &&
+            typeof episode === 'string' &&
+            episode.length > 0;
+
+          if (shouldResolveTvdbAiredOrder) {
+            if (typeof season !== 'string' || typeof episode !== 'string') {
+              throw new HttpError('TVDB season and episode are required for Aiometadata TVDB thumbnails', 400);
+            }
+            const requestedTvdbSeason = season;
+            const requestedTvdbEpisode = episode;
+            const mappedEpisode = await resolveImdbEpisodeWithTvdbOrderToTmdb(
+              rawImdbSeriesId,
+              requestedTvdbSeason,
+              requestedTvdbEpisode,
+              tmdbKey,
+              phases
+            );
+            if (mappedEpisode?.showId) {
+              mediaId = mappedEpisode.showId;
+              season = mappedEpisode.season;
+              episode = mappedEpisode.episode;
+              tvdbSeriesId = mappedEpisode.tvdbSeriesId;
+              mappedImdbId = rawImdbSeriesId;
+
+              const showResponse = await fetchJsonCached(
+                `tmdb:tv:${mediaId}`,
+                `https://api.themoviedb.org/3/tv/${mediaId}?api_key=${tmdbKey}`,
+                TMDB_CACHE_TTL_MS,
+                phases,
+                'tmdb'
+              );
+              if (showResponse.ok) {
+                media = showResponse.data;
+                mediaType = 'tv';
+              }
+            }
+          }
+
+          if (!media) {
+            const findResponse = await fetchJsonCached(
+              `tmdb:find:${rawImdbSeriesId}`,
+              `https://api.themoviedb.org/3/find/${rawImdbSeriesId}?api_key=${tmdbKey}&external_source=imdb_id`,
+              TMDB_CACHE_TTL_MS,
+              phases,
+              'tmdb'
+            );
+            const findData = findResponse.data || {};
+            const prefersTvResult =
+              imageType === 'thumbnail' ||
+              (typeof season === 'string' && season.length > 0) ||
+              (typeof episode === 'string' && episode.length > 0);
+            media = prefersTvResult
+              ? findData.tv_results?.[0] || findData.movie_results?.[0]
+              : findData.movie_results?.[0] || findData.tv_results?.[0];
+            mediaType = media
+              ? findData.tv_results?.[0] && media === findData.tv_results[0]
+                ? 'tv'
+                : 'movie'
+              : null;
+          }
+        }
       }
 
       if (!media && !useRawKitsuFallback) {
@@ -4148,6 +5283,10 @@ export async function GET(
       let imgUrl = rawFallbackImageUrl;
       let tmdbRating = 'N/A';
       let episodeTmdbRating: string | null = null;
+      let thumbnailFallbackEpisodeText: string | null = null;
+      let thumbnailFallbackEpisodeCode: string | null = null;
+      let usedThumbnailBackdropFallback = false;
+      let resolvedTmdbEpisodeNumber: string | null = null;
       let providerRatings = new Map<RatingPreference, string>();
       const renderedRatingTtlByProvider = new Map<BadgeKey, number>();
       let outputWidth = 1280;
@@ -4192,6 +5331,50 @@ export async function GET(
         const streamEpisode = episode || '1';
         streamBadgesIdForCache = `${streamBadgesIdForCache}:${streamSeason}:${streamEpisode}`;
       }
+      const seasonDetailsPromise =
+        !useRawKitsuFallback && imageType === 'thumbnail' && mediaType === 'tv' && season && episode
+          ? (async () => {
+            const seasonCacheKeyBase = `tmdb:tv:${media.id}:season:${season}`;
+            const primaryResponse = await fetchJsonCached(
+              `${seasonCacheKeyBase}:${requestedImageLang}`,
+              `https://api.themoviedb.org/3/tv/${media.id}/season/${season}?api_key=${tmdbKey}&language=${requestedImageLang}`,
+              TMDB_CACHE_TTL_MS,
+              phases,
+              'tmdb'
+            );
+            if (primaryResponse.ok && primaryResponse.data) {
+              return primaryResponse.data;
+            }
+            if (requestedImageLang !== FALLBACK_IMAGE_LANGUAGE) {
+              const fallbackResponse = await fetchJsonCached(
+                `${seasonCacheKeyBase}:${FALLBACK_IMAGE_LANGUAGE}`,
+                `https://api.themoviedb.org/3/tv/${media.id}/season/${season}?api_key=${tmdbKey}&language=${FALLBACK_IMAGE_LANGUAGE}`,
+                TMDB_CACHE_TTL_MS,
+                phases,
+                'tmdb'
+              );
+              if (fallbackResponse.ok && fallbackResponse.data) {
+                return fallbackResponse.data;
+              }
+            }
+            return null;
+          })()
+          : null;
+      if (seasonDetailsPromise) {
+        const seasonDetails = await seasonDetailsPromise;
+        const requestedEpisodeIndex = Number(episode);
+        const seasonEpisodes = Array.isArray(seasonDetails?.episodes) ? seasonDetails.episodes : [];
+        if (Number.isFinite(requestedEpisodeIndex) && requestedEpisodeIndex > 0) {
+          const seasonEpisode = seasonEpisodes[requestedEpisodeIndex - 1];
+          const mappedEpisodeNumber =
+            typeof seasonEpisode?.episode_number === 'number' || typeof seasonEpisode?.episode_number === 'string'
+              ? String(seasonEpisode.episode_number).trim()
+              : '';
+          if (mappedEpisodeNumber) {
+            resolvedTmdbEpisodeNumber = mappedEpisodeNumber;
+          }
+        }
+      }
       const streamBadgesWindowTtlMs = shouldRenderStreamBadges
         ? mediaType && streamBadgesIdForCache
           ? getRatingCacheTtlMs({
@@ -4226,8 +5409,12 @@ export async function GET(
         imageType !== 'logo' ? qualityBadgesStyle : '-',
         imageType === 'backdrop' ? backdropRatingsLayout : imageType === 'thumbnail' ? thumbnailRatingsLayout : '-',
         imageType === 'thumbnail' ? thumbnailSize : '-',
+        imageType === 'thumbnail' ? aiometadataEpisodeProvider || '-' : '-',
+        verticalBadgeContent,
         ratingStyle,
         effectiveRatingPreferences.join(',') || 'none',
+        mdblistCacheSeed,
+        simklCacheSeed,
         streamBadgesCacheKey,
         'v1',
       ].join('|');
@@ -4240,7 +5427,11 @@ export async function GET(
         const cachedFinalImage = await getCachedImageFromObjectStorage(finalObjectStorageKey);
         if (cachedFinalImage) {
           objectStorageHit = true;
-          return cachedFinalImage;
+          return {
+            body: cachedFinalImage.body,
+            contentType: cachedFinalImage.contentType,
+            cacheControl: cachedFinalImage.cacheControl,
+          };
         }
       }
       const detailsBundlePromise = !useRawKitsuFallback
@@ -4282,10 +5473,11 @@ export async function GET(
       const episodeDetailsPromise =
         !useRawKitsuFallback && imageType === 'thumbnail' && mediaType === 'tv' && season && episode
           ? (async () => {
-            const episodeCacheKeyBase = `tmdb:tv:${media.id}:season:${season}:episode:${episode}`;
+            const tmdbEpisodeLookupNumber = resolvedTmdbEpisodeNumber || episode;
+            const episodeCacheKeyBase = `tmdb:tv:${media.id}:season:${season}:episode:${tmdbEpisodeLookupNumber}`;
             const primaryResponse = await fetchJsonCached(
               `${episodeCacheKeyBase}:${requestedImageLang}`,
-              `https://api.themoviedb.org/3/tv/${media.id}/season/${season}/episode/${episode}?api_key=${tmdbKey}&language=${requestedImageLang}`,
+              `https://api.themoviedb.org/3/tv/${media.id}/season/${season}/episode/${tmdbEpisodeLookupNumber}?api_key=${tmdbKey}&language=${requestedImageLang}`,
               TMDB_CACHE_TTL_MS,
               phases,
               'tmdb'
@@ -4296,7 +5488,7 @@ export async function GET(
             if (requestedImageLang !== FALLBACK_IMAGE_LANGUAGE) {
               const fallbackResponse = await fetchJsonCached(
                 `${episodeCacheKeyBase}:${FALLBACK_IMAGE_LANGUAGE}`,
-                `https://api.themoviedb.org/3/tv/${media.id}/season/${season}/episode/${episode}?api_key=${tmdbKey}&language=${FALLBACK_IMAGE_LANGUAGE}`,
+                `https://api.themoviedb.org/3/tv/${media.id}/season/${season}/episode/${tmdbEpisodeLookupNumber}?api_key=${tmdbKey}&language=${FALLBACK_IMAGE_LANGUAGE}`,
                 TMDB_CACHE_TTL_MS,
                 phases,
                 'tmdb'
@@ -4311,9 +5503,10 @@ export async function GET(
       const episodeExternalIdsPromise =
         !useRawKitsuFallback && imageType === 'thumbnail' && mediaType === 'tv' && season && episode
           ? (async () => {
+            const tmdbEpisodeLookupNumber = resolvedTmdbEpisodeNumber || episode;
             const response = await fetchJsonCached(
-              `tmdb:tv:${media.id}:season:${season}:episode:${episode}:external_ids`,
-              `https://api.themoviedb.org/3/tv/${media.id}/season/${season}/episode/${episode}/external_ids?api_key=${tmdbKey}`,
+              `tmdb:tv:${media.id}:season:${season}:episode:${tmdbEpisodeLookupNumber}:external_ids`,
+              `https://api.themoviedb.org/3/tv/${media.id}/season/${season}/episode/${tmdbEpisodeLookupNumber}/external_ids?api_key=${tmdbKey}`,
               TMDB_CACHE_TTL_MS,
               phases,
               'tmdb'
@@ -4984,6 +6177,8 @@ export async function GET(
           let posterCollection = input.posters || [];
           const backdropCollection = input.backdrops || [];
           const logoCollection = input.logos || [];
+          const preferredPosterPath = details?.poster_path || media?.poster_path || null;
+          const preferredBackdropPath = details?.backdrop_path || media?.backdrop_path || null;
           const selectedLogo = pickByLanguageWithFallback(
             logoCollection,
             requestedImageLang,
@@ -4992,18 +6187,24 @@ export async function GET(
           const logoPath = selectedLogo?.file_path || null;
 
           const localizedPosterPath =
-            pickByLanguageWithFallback(posterCollection, requestedImageLang, FALLBACK_IMAGE_LANGUAGE)?.file_path || null;
+            pickByLanguageWithFallback(
+              posterCollection,
+              requestedImageLang,
+              FALLBACK_IMAGE_LANGUAGE,
+              preferredPosterPath
+            )?.file_path || preferredPosterPath;
           let originalPosterPath =
             localizedPosterPath ||
-            details?.poster_path ||
-            media?.poster_path ||
             posterCollection[0]?.file_path;
           const localizedBackdropPath =
-            pickByLanguageWithFallback(backdropCollection, requestedImageLang, FALLBACK_IMAGE_LANGUAGE)?.file_path || null;
+            pickByLanguageWithFallback(
+              backdropCollection,
+              requestedImageLang,
+              FALLBACK_IMAGE_LANGUAGE,
+              preferredBackdropPath
+            )?.file_path || preferredBackdropPath;
           const originalBackdropPath =
             localizedBackdropPath ||
-            details?.backdrop_path ||
-            media?.backdrop_path ||
             backdropCollection[0]?.file_path;
 
           // Kitsu IDs usually represent a specific anime season: prefer season posters over unified show posters.
@@ -5065,7 +6266,12 @@ export async function GET(
 
             originalPosterPath =
               seasonPosterPath ||
-              pickByLanguageWithFallback(posterCollection, requestedImageLang, FALLBACK_IMAGE_LANGUAGE)?.file_path ||
+              pickByLanguageWithFallback(
+                posterCollection,
+                requestedImageLang,
+                FALLBACK_IMAGE_LANGUAGE,
+                seasonPosterPath
+              )?.file_path ||
               originalPosterPath;
           }
 
@@ -5094,6 +6300,7 @@ export async function GET(
               FALLBACK_IMAGE_LANGUAGE,
               originalBackdropPath
             );
+            usedThumbnailBackdropFallback = Boolean(selectedBackdrop?.file_path);
             return {
               imgPath: selectedBackdrop?.file_path || '',
               logoAspectRatio: null,
@@ -5107,6 +6314,14 @@ export async function GET(
             if (episodeDetailsPromise) {
               const episodeDetails = await episodeDetailsPromise;
               stillPath = typeof episodeDetails?.still_path === 'string' ? episodeDetails.still_path : null;
+              thumbnailFallbackEpisodeText =
+                typeof episodeDetails?.name === 'string' && episodeDetails.name.trim().length > 0
+                  ? episodeDetails.name.trim()
+                  : null;
+              thumbnailFallbackEpisodeCode =
+                season && episode
+                  ? `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
+                  : null;
               const normalizedEpisodeRating = normalizeRatingValue(episodeDetails?.vote_average);
               if (normalizedEpisodeRating) {
                 episodeTmdbRating = normalizedEpisodeRating;
@@ -5239,7 +6454,11 @@ export async function GET(
         shouldApplyPosterCleanOverlay && selectedPosterLogoPath
           ? buildTmdbImageUrl('logo', selectedPosterLogoPath, outputWidth)
           : null;
-      if (!shouldRenderBadges && !posterTitleText && !posterLogoUrl) {
+      const shouldRenderThumbnailFallbackOverlay =
+        imageType === 'thumbnail' &&
+        usedThumbnailBackdropFallback &&
+        Boolean(thumbnailFallbackEpisodeCode || thumbnailFallbackEpisodeText);
+      if (!shouldRenderBadges && !posterTitleText && !posterLogoUrl && !shouldRenderThumbnailFallbackOverlay) {
         return getSourceImagePayload(imgUrl);
       }
       if (providerRatingsPromise) {
@@ -5281,7 +6500,13 @@ export async function GET(
           iconCornerRadius: 'iconCornerRadius' in meta ? meta.iconCornerRadius : undefined,
         });
       }
-      if (ratingBadges.length === 0 && streamBadges.length === 0 && !posterTitleText && !posterLogoUrl) {
+      if (
+        ratingBadges.length === 0 &&
+        streamBadges.length === 0 &&
+        !posterTitleText &&
+        !posterLogoUrl &&
+        !shouldRenderThumbnailFallbackOverlay
+      ) {
         return getSourceImagePayload(imgUrl);
       }
       const usePosterBadgeLayout = type === 'poster';
@@ -5311,6 +6536,7 @@ export async function GET(
           : [...ratingBadges];
       const backdropRows =
         useBackdropBadgeLayout && !useBackdropVerticalLayout ? chunkBy(cappedRatingBadges, 3) : [];
+      let backdropColumns: RatingBadge[][] | undefined = undefined;
       let posterBadgeGroups = splitPosterBadgesByLayout(
         cappedRatingBadges,
         posterRatingsLayout,
@@ -5343,6 +6569,9 @@ export async function GET(
       let posterMinMetrics: BadgeLayoutMetrics = DEFAULT_BADGE_MIN_METRICS;
       let backdropMinMetrics: BadgeLayoutMetrics = DEFAULT_BADGE_MIN_METRICS;
       let posterRowHorizontalInset = 12;
+      let posterReferenceBadgeHeight: number | undefined = undefined;
+      let posterReferenceVerticalBadgeHeight: number | undefined = undefined;
+      let posterReferenceBadgeGap: number | undefined = undefined;
 
       if (useBackdropBadgeLayout) {
         badgeIconSize = 32;
@@ -5425,6 +6654,24 @@ export async function GET(
         };
         badgeTopOffset = 24;
         badgeBottomOffset = 24;
+        posterReferenceBadgeHeight = estimateBadgeHeight(
+          badgeFontSize,
+          badgePaddingX,
+          badgePaddingY,
+          badgeIconSize,
+          'standard'
+        );
+        posterReferenceVerticalBadgeHeight = estimateBadgeHeight(
+          badgeFontSize,
+          badgePaddingX,
+          badgePaddingY,
+          badgeIconSize,
+          verticalBadgeContent
+        );
+        posterReferenceBadgeGap = badgeGap;
+        if ((posterRatingsLayout === 'left' || posterRatingsLayout === 'right' || posterRatingsLayout === 'left-right') && verticalBadgeContent === 'stacked') {
+          badgeGap = Math.max(badgeGap, 12);
+        }
       } else if (useLogoBadgeLayout) {
         badgeIconSize = 92;
         badgeFontSize = 68;
@@ -5436,6 +6683,8 @@ export async function GET(
       if (usePosterBadgeLayout && cappedRatingBadges.length > 0) {
         let fittedPosterMetrics: BadgeLayoutMetrics;
         if (posterRatingsLayout === 'left' || posterRatingsLayout === 'right' || posterRatingsLayout === 'left-right') {
+          const isSingleSideVerticalPoster =
+            posterRatingsLayout === 'left' || posterRatingsLayout === 'right';
           const useThreeBadgeTopRow =
             posterRatingsLayout === 'left-right' &&
             topRatingBadges.length === 1 &&
@@ -5449,34 +6698,86 @@ export async function GET(
             (posterRatingsLayout === 'left' || posterRatingsLayout === 'right') && streamBadges.length > 0;
           const reservedTopRows =
             posterRatingsLayout === 'left-right' && topRatingBadges.length > 0 ? 1 : 0;
+          const baseBadgeHeight = estimateBadgeHeight(
+            badgeFontSize,
+            badgePaddingX,
+            badgePaddingY,
+            badgeIconSize,
+            'standard'
+          );
+          const posterOverlayPresent = Boolean(posterTitleText || posterLogoUrl);
+          const posterOverlayGap = posterOverlayPresent ? Math.max(8, Math.round(badgeGap * 0.9)) : 0;
+          const posterQualityPlacement = resolvePosterQualityBadgePlacement(
+            posterRatingsLayout,
+            qualityBadgesSide,
+            posterQualityBadgesPosition
+          );
+          const bottomQualityReservedHeight =
+            posterQualityPlacement === 'bottom' && streamBadges.length > 0
+              ? Math.max(36, Math.round(baseBadgeHeight * 1.05)) + badgeGap
+              : 0;
+          const posterOverlayBodyReservedHeight =
+            posterOverlayPresent
+              ? Math.max(
+                  posterLogoUrl ? Math.round(outputHeight * 0.20) : 96,
+                  Math.round(outputHeight * 0.18)
+                )
+              : 0;
+          const posterOverlayReservedHeight =
+            posterOverlayPresent
+              ? posterOverlayGap +
+                posterOverlayBodyReservedHeight +
+                (bottomQualityReservedHeight > 0 ? bottomQualityReservedHeight : baseBadgeHeight)
+              : 0;
+          const overlayReservedHeight = posterOverlayPresent
+            ? posterOverlayReservedHeight
+            : bottomQualityReservedHeight;
+          const posterBaseMetrics: BadgeLayoutMetrics = {
+            iconSize: badgeIconSize,
+            fontSize: badgeFontSize,
+            paddingX: badgePaddingX,
+            paddingY: badgePaddingY,
+            gap: badgeGap,
+          };
           const posterColumnMaxWidth =
             posterRatingsLayout === 'left-right'
               ? Math.max(160, Math.floor((outputWidth - 36) / 2))
               : alignPosterQualityBadges
                 ? Math.max(220, Math.floor(outputWidth * 0.6))
                 : Math.max(180, Math.floor(outputWidth * 0.46));
-          fittedPosterMetrics = fitPosterBadgeMetricsToWidth(widthRows, posterColumnMaxWidth + 24, {
-            iconSize: badgeIconSize,
-            fontSize: badgeFontSize,
-            paddingX: badgePaddingX,
-            paddingY: badgePaddingY,
-            gap: badgeGap,
-          }, posterMinMetrics);
-          fittedPosterMetrics = fitPosterBadgeMetricsToHeight(
-            posterColumns,
-            outputHeight,
-            fittedPosterMetrics,
-            badgeTopOffset,
-            badgeBottomOffset,
+          fittedPosterMetrics = fitPosterBadgeMetricsToWidth(
+            widthRows,
+            posterColumnMaxWidth + 24,
+            posterBaseMetrics,
             posterMinMetrics,
-            reservedTopRows
+            false,
+            false,
+            verticalBadgeContent
           );
+          const shouldPreservePosterBadgeSizeForOverlay = overlayReservedHeight > 0;
+          if (!isSingleSideVerticalPoster && !shouldPreservePosterBadgeSizeForOverlay) {
+            fittedPosterMetrics = fitPosterBadgeMetricsToHeight(
+              posterColumns,
+              outputHeight,
+              fittedPosterMetrics,
+              badgeTopOffset,
+              badgeBottomOffset + overlayReservedHeight,
+              posterMinMetrics,
+              reservedTopRows,
+              verticalBadgeContent
+            );
+          }
+          const posterColumnCountMetrics =
+            isSingleSideVerticalPoster || shouldPreservePosterBadgeSizeForOverlay
+              ? posterBaseMetrics
+              : fittedPosterMetrics;
           const maxPerColumn = getMaxBadgeColumnCount(
             outputHeight,
-            fittedPosterMetrics,
+            posterColumnCountMetrics,
             badgeTopOffset,
-            badgeBottomOffset,
-            reservedTopRows
+            badgeBottomOffset + overlayReservedHeight,
+            reservedTopRows,
+            verticalBadgeContent
           );
           const effectiveMaxPerSide =
             posterRatingsMaxPerSide === null
@@ -5570,44 +6871,89 @@ export async function GET(
               activeBackdropLikeLayout,
               backdropLikeImageType
             );
-            const backdropColumnMaxWidth = Math.max(180, Math.floor(backdropPlacement.width - 24));
-            fittedBackdropMetrics = fitPosterBadgeMetricsToWidth(
-              rightRatingBadges.map((badge) => [badge]),
-              backdropPlacement.width,
-              {
-                iconSize: badgeIconSize,
-                fontSize: badgeFontSize,
-                paddingX: badgePaddingX,
-                paddingY: badgePaddingY,
-                gap: badgeGap,
-              },
-              backdropMinMetrics
-            );
-            fittedBackdropMetrics = fitPosterBadgeMetricsToHeight(
-              [rightRatingBadges],
-              outputHeight,
+            fittedBackdropMetrics = {
+              iconSize: badgeIconSize,
+              fontSize: badgeFontSize,
+              paddingX: badgePaddingX,
+              paddingY: badgePaddingY,
+              gap: badgeGap,
+            };
+            const verticalOutputHeightLimit =
+              imageType === 'backdrop'
+                ? Math.floor(outputHeight / 2) + badgeBottomOffset
+                : outputHeight;
+            const maxPerColumn = getMaxBadgeColumnCount(
+              verticalOutputHeightLimit,
               fittedBackdropMetrics,
               badgeTopOffset,
               badgeBottomOffset,
-              backdropMinMetrics
+              0,
+              verticalBadgeContent
             );
-            const maxPerColumn = getMaxBadgeColumnCount(
-              outputHeight,
+            backdropColumns = splitBackdropVerticalBadgesIntoColumns(
+              rightRatingBadges,
+              backdropPlacement,
               fittedBackdropMetrics,
-              badgeTopOffset,
-              badgeBottomOffset
+              maxPerColumn,
+              verticalBadgeContent,
+              imageType === 'backdrop'
+                ? verticalBadgeContent === 'stacked'
+                  ? 4
+                  : 3
+                : 2
             );
-            rightRatingBadges = rightRatingBadges.slice(0, maxPerColumn);
-            cappedRatingBadges = [...rightRatingBadges];
+            if (backdropColumns.length > 0) {
+              leftRatingBadges = backdropColumns[0] || [];
+              rightRatingBadges =
+                backdropColumns.length > 1
+                  ? backdropColumns[backdropColumns.length - 1] || []
+                  : backdropColumns[0] || [];
+              cappedRatingBadges = backdropColumns.flat();
+            } else {
+              leftRatingBadges = [];
+              rightRatingBadges = rightRatingBadges.slice(0, maxPerColumn);
+              cappedRatingBadges = [...rightRatingBadges];
+            }
           } else {
             const backdropRegion = getBackdropBadgePlacement(
               outputWidth,
               activeBackdropLikeLayout,
               backdropLikeImageType
             );
+            const baseBackdropBadgeHeight = estimateBadgeHeight(
+              badgeFontSize,
+              badgePaddingX,
+              badgePaddingY,
+              badgeIconSize,
+              'standard'
+            );
+            const backdropQualityHeight = Math.max(44, Math.round(baseBackdropBadgeHeight * 1.25));
+            const backdropQualityBadgeWidth = Math.min(
+              Math.max(72, Math.round(backdropQualityHeight * 1.75)),
+              Math.max(72, outputWidth - 24)
+            );
+            const backdropQualityColumnGap = Math.max(8, Math.round(badgeGap * 0.8));
+            const backdropQualityColumnCount =
+              imageType === 'backdrop' && backdropRegion.align === 'right'
+                ? streamBadges.length > 2
+                  ? 2
+                  : streamBadges.length > 0
+                    ? 1
+                    : 0
+                : 0;
+            const reservedQualityWidth =
+              backdropQualityColumnCount > 0
+                ? backdropQualityColumnCount * backdropQualityBadgeWidth +
+                  Math.max(0, backdropQualityColumnCount - 1) * backdropQualityColumnGap +
+                  backdropQualityColumnGap
+                : 0;
+            const availableBackdropRowWidth = Math.max(
+              0,
+              backdropRegion.width - reservedQualityWidth
+            );
             fittedBackdropMetrics = fitPosterBadgeMetricsToWidth(
               [topRatingBadges, bottomRatingBadges].filter((row) => row.length > 0),
-              backdropRegion.width,
+              availableBackdropRowWidth > 0 ? availableBackdropRowWidth : backdropRegion.width,
               {
                 iconSize: badgeIconSize,
                 fontSize: badgeFontSize,
@@ -5670,7 +7016,10 @@ export async function GET(
         renderedRatingCacheTtlCandidates.length > 0
           ? Math.min(...renderedRatingCacheTtlCandidates)
           : TMDB_CACHE_TTL_MS;
-      const responseCacheControl = `public, s-maxage=${Math.max(60, Math.floor(finalImageCacheTtlMs / 1000))}, stale-while-revalidate=60`;
+      const responseCacheControl =
+        imageType === 'thumbnail'
+          ? 'no-store, max-age=0'
+          : `public, s-maxage=${Math.max(60, Math.floor(finalImageCacheTtlMs / 1000))}, stale-while-revalidate=60`;
       const renderedPayload = await renderWithSharp(
         {
           imageType,
@@ -5687,6 +7036,11 @@ export async function GET(
           posterRowHorizontalInset,
           posterTitleText,
           posterLogoUrl,
+          posterReferenceBadgeHeight,
+          posterReferenceVerticalBadgeHeight,
+          posterReferenceBadgeGap,
+          thumbnailFallbackEpisodeText: usedThumbnailBackdropFallback ? thumbnailFallbackEpisodeText : null,
+          thumbnailFallbackEpisodeCode: usedThumbnailBackdropFallback ? thumbnailFallbackEpisodeCode : null,
           badgeIconSize,
           badgeFontSize,
           badgePaddingX,
@@ -5704,11 +7058,13 @@ export async function GET(
           backdropRatingsLayout: activeBackdropLikeLayout,
           thumbnailRatingsLayout,
           thumbnailSize,
+          verticalBadgeContent,
           ratingStyle,
           topBadges: topRatingBadges,
           bottomBadges: bottomRatingBadges,
           leftBadges: leftRatingBadges,
           rightBadges: rightRatingBadges,
+          backdropColumns,
           backdropRows,
           cacheControl: responseCacheControl,
         },
