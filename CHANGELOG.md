@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.11](https://github.com/realbestia1/erdb/compare/v0.2.10...v0.2.11) - 2026-04-02
+
+- Add thumbnail rating style and bump version ([8581d4f](https://github.com/realbestia1/erdb/commit/8581d4f2613cb0518cc0c88a82895372d8c4aba8))
+  Introduce thumbnailRatingStyle handling in HomePage: include it in the preview-type rating selection logic, add it to the exported state list, and persist it to the config. Also update the in-component currentVersion and bump the package version to 0.2.11.
+
 ## [0.2.10](https://github.com/realbestia1/erdb/compare/v0.2.9...v0.2.10) - 2026-04-02
 
 - Add thumbnailRatingStyle support ([42c6ae4](https://github.com/realbestia1/erdb/commit/42c6ae4a811b5caf4b60bd16f8e903f48ab31f1f))
