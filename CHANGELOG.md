@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.5](https://github.com/realbestia1/erdb/compare/v0.2.4...v0.2.5) - 2026-04-02
+
+- fix(renderer): standardize logo rating height to 100px and remove auto-scaling ([7265a12](https://github.com/realbestia1/erdb/commit/7265a12c1e05c6eea474cb3d25d6c37dfc733d4c))
+  - Removed the automatic boosting system for rating badges in the 'logo' image type.
+  - Disabled dynamic scale calculation based on the original logo aspect ratio.
+  - Implemented fixed badge metrics (iconSize: 84px, paddingY: 8px) to guarantee a consistent 100px height.
+  - Optimized fontSize (62px), paddingX (32px), and gap (20px) for better aesthetics at a fixed size.
+  - Ensured badge size remains constant (preserveBadgeSize: true) even when multiple ratings are displayed.
+
 ## [0.2.4](https://github.com/realbestia1/erdb/compare/v0.2.3...v0.2.4) - 2026-04-01
 
 - preserve better readability on very wide logos ([c6603cf](https://github.com/realbestia1/erdb/commit/c6603cfd3e9edf15f485b0e29501c0431dfc353c))
