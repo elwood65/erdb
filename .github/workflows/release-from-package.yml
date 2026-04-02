@@ -8,6 +8,7 @@ on:
       - package.json
 
 permissions:
+  actions: write
   contents: write
 
 env:
@@ -105,6 +106,13 @@ jobs:
         run: |
           git tag "${{ steps.notes.outputs.tag }}"
           git push origin "${{ steps.notes.outputs.tag }}"
+
+      - name: Trigger Docker image publish
+        if: steps.version_check.outputs.should_release == 'true' && steps.notes.outputs.tag_exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh workflow run .github/workflows/docker-image.yml --ref "${{ steps.notes.outputs.tag }}"
 
       - name: Create or update GitHub release
         if: steps.version_check.outputs.should_release == 'true'

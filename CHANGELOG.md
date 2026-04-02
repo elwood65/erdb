@@ -2,6 +2,100 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.6](https://github.com/realbestia1/erdb/compare/v0.2.5...v0.2.6) - 2026-04-02
+
+- fix: prevent preview image clipping on zoom ([425f863](https://github.com/realbestia1/erdb/commit/425f863d25c1c194ee2e8a2c8cf5858ec5ba6020))
+  - Changed `object-cover` to `object-contain` for the live preview image in `workspace-page-view.tsx`.
+  - Bumped package version to 0.2.6.
+  This resolves a UI rendering issue where badges placed on the exact edges of the generated image would get cropped or skewed when the user zooms in/out of the page. By containing the image fully within the wrapper regardless of fractional aspect ratio differences, all image boundaries and components always remain completely visible.
+
+## [0.2.5](https://github.com/realbestia1/erdb/compare/v0.2.4...v0.2.5) - 2026-04-02
+
+- fix(renderer): standardize logo rating height to 100px and remove auto-scaling ([7265a12](https://github.com/realbestia1/erdb/commit/7265a12c1e05c6eea474cb3d25d6c37dfc733d4c))
+  - Removed the automatic boosting system for rating badges in the 'logo' image type.
+  - Disabled dynamic scale calculation based on the original logo aspect ratio.
+  - Implemented fixed badge metrics (iconSize: 84px, paddingY: 8px) to guarantee a consistent 100px height.
+  - Optimized fontSize (62px), paddingX (32px), and gap (20px) for better aesthetics at a fixed size.
+  - Ensured badge size remains constant (preserveBadgeSize: true) even when multiple ratings are displayed.
+
+## [0.2.4](https://github.com/realbestia1/erdb/compare/v0.2.3...v0.2.4) - 2026-04-01
+
+- preserve better readability on very wide logos ([c6603cf](https://github.com/realbestia1/erdb/commit/c6603cfd3e9edf15f485b0e29501c0431dfc353c))
+
+## [0.2.3](https://github.com/realbestia1/erdb/compare/v0.2.2...v0.2.3) - 2026-04-01
+
+- bump to v0.2.3, keep logo ratings on one row, and restore standalone CSS in local start txt ([46e8890](https://github.com/realbestia1/erdb/commit/46e8890ae511090dc5012b4488e57a52214fb818))
+  - bump package version from 0.2.2 to 0.2.3
+  - keep logo ratings on a single row and extend the canvas width instead of wrapping to multiple lines
+  - improve logo badge spacing and preserve better readability on very wide logos
+  - fix local production startup so the standalone server also sees `.next/static` and `public`, restoring CSS/assets when using `npm run build` + `npm run start`
+  - align the frontend version fallback with v0.2.3
+
+## [0.2.2](https://github.com/realbestia1/erdb/compare/v0.2.1...v0.2.2) - 2026-04-01
+
+- bump to v0.2.2 and remove mobile configurator nested scrolling ([0e54627](https://github.com/realbestia1/erdb/commit/0e546273a3b85e382817c59c7645bb9bbb145b05))
+  - bump package version from 0.2.1 to 0.2.2
+  - remove the extra internal mobile scroll from the configurator shell
+  - let the rating provider list expand naturally on mobile instead of using its own vertical scroll
+  - make generated config string and proxy manifest boxes wrap on mobile while keeping desktop scrolling behavior
+  - align changelog and frontend version fallback with v0.2.2
+
+## [0.2.1](https://github.com/realbestia1/erdb/compare/v0.2.0...v0.2.1) - 2026-04-01
+
+- implement robust fetch with retries for TMDB metadata ([76caef7](https://github.com/realbestia1/erdb/commit/76caef7a97c37bf983b48a0081becfd54f360c9a))
+  Added lib/request.ts: Introduced a fetchWithRetry utility to handle transient network failures.
+  Improved Resilience: Implemented automatic 3-attempt retries with exponential backoff for ConnectTimeoutError and other networking issues.
+  Optimized Timeouts: Set an 8-second timeout per request attempt to ensure faster recovery and better responsiveness.
+  Route Integration: Updated the main metadata route (app/[type]/[id]/route.tsx) and the proxy layer to use the new robust fetching mechanism.
+  Bug Fix: Resolved frequent TypeError: fetch failed caused by TMDB connection timeouts.
+
+## [0.2.0](https://github.com/realbestia1/erdb/compare/v0.1.27...v0.2.0) - 2026-04-01
+
+- rework web panel UI for a more modern, minimal workspace feel ([f8e861d](https://github.com/realbestia1/erdb/commit/f8e861d2aae67d7360ebe8e4298e5a2828791f26))
+
+## [0.1.27](https://github.com/realbestia1/erdb/compare/v0.1.26...v0.1.27) - 2026-04-01
+
+- finalize dedicated API docs flow and bump package version to 0.1.27
+  Kept the new standalone `/docs` page as the single place for API documentation, linked the homepage to it, removed the old duplicated API docs content from the main page UI, and clarified `realimdb:` usage for addons that actually source series or episode metadata from IMDb IDs.
+
+## [0.1.26](https://github.com/realbestia1/erdb/compare/v0.1.25...v0.1.26) - 2026-04-01
+
+- add dedicated API docs page and bump package version to 0.1.26
+  Added a standalone `/docs` page for the ERDB public API surface, linked it from the homepage, documented renderer/proxy/helper endpoints with real query behavior, and clarified that `realimdb:` should be used for addons that actually source series or episode metadata from IMDb IDs.
+
+## [0.1.25](https://github.com/realbestia1/erdb/compare/v0.1.24...v0.1.25) - 2026-03-31
+
+- align anime rating provider logos and bump package version to 0.1.25 ([92dbe86](https://github.com/realbestia1/erdb/commit/92dbe8698914b612ac1ee8dfaea4e33528e16ea6))
+  Updated the anime rating provider badges to use cleaner and more accurate provider assets, with special fixes for MyAnimeList, AniList, and Kitsu rendering. This includes centering and scaling adjustments for MAL, switching AniList to its official icon asset, and replacing the Kitsu badge with the exact favicon asset used by the official Kitsu web app. Also bumped the package version from 0.1.24 to 0.1.25.
+- update ([671b47e](https://github.com/realbestia1/erdb/commit/671b47ef0a437bedfb1f57377361cfca09f57e48))
+
+## [0.1.24](https://github.com/realbestia1/erdb/compare/v0.1.23...v0.1.24) - 2026-03-31
+
+- Bump to v0.1.24 and add configurable logo rating limits ([02885e0](https://github.com/realbestia1/erdb/commit/02885e0e093ff053ec086fe8e1f5255df965ca86))
+  - bump package version to 0.1.24
+  - add logoRatingsMax so logo renders can cap the maximum number of rating badges
+  - expose logoRatingsMax across the renderer, UI, config string, proxy config, and AiOMetadata patterns
+  - preserve empty rating params so disabling all providers correctly bypasses image rendering instead of falling back to all ratings
+  - update .github README and AI integration prompt to document the new logoRatingsMax behavior
+
+## [0.1.23](https://github.com/realbestia1/erdb/compare/v0.1.22...v0.1.23) - 2026-03-31
+
+- Bump to v0.1.23 and refine logo badge rendering ([0b41bf0](https://github.com/realbestia1/erdb/commit/0b41bf0e243d44db83574b18e1c60014c49a3a6f))
+- Update release-from-package.yml ([7926f81](https://github.com/realbestia1/erdb/commit/7926f81823d4f31e39ccafaa063aa94dc00941ff))
+
+## [0.1.22](https://github.com/realbestia1/erdb/compare/v0.1.21...v0.1.22) - 2026-03-31
+
+- refine logo rating rendering ([28c1c2c](https://github.com/realbestia1/erdb/commit/28c1c2c18705d8d72c7c5fbd6f8e4255afcdf921))
+
+## [0.1.21](https://github.com/realbestia1/erdb/compare/v0.1.20...v0.1.21) - 2026-03-31
+
+- switch AiOMetadata non-thumbnail patterns to IMDb IDs ([7a4436b](https://github.com/realbestia1/erdb/commit/7a4436b07684697751a7ed947cdb5260e4751e47))
+
+## [0.1.20](https://github.com/realbestia1/erdb/compare/v0.1.19...v0.1.20) - 2026-03-31
+
+- Bump to v0.1.20 and improve TMDB logo/image rendering ([60dfda6](https://github.com/realbestia1/erdb/commit/60dfda61399d77ef87863fdb80a2c153f79f2ca5))
+- Update docker-image.yml ([831909f](https://github.com/realbestia1/erdb/commit/831909ffaabf9a00b6df3bf2b031a315b1055f0b))
+
 ## [0.1.19](https://github.com/realbestia1/erdb/compare/v0.1.18...v0.1.19) - 2026-03-31
 
 - Fix npm run build failure caused by AiOMetadata TVDB thumbnail type check ([5a65003](https://github.com/realbestia1/erdb/commit/5a65003fe8112d5ce0c16492944c28d7ee51f4e4))
