@@ -5311,7 +5311,9 @@ export async function GET(
         ? posterVerticalBadgeContent
         : 'standard'
       : imageType === 'thumbnail'
-        ? thumbnailVerticalBadgeContent
+        ? isVerticalThumbnailRatingLayout(thumbnailRatingsLayout)
+          ? thumbnailVerticalBadgeContent
+          : 'standard'
         : imageType === 'backdrop'
           ? isVerticalBackdropRatingLayout(backdropRatingsLayout)
             ? backdropVerticalBadgeContent
