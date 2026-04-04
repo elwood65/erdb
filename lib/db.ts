@@ -1,8 +1,8 @@
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { DATA_DIR } from './paths';
 
-const DATA_DIR = join(process.cwd(), 'data');
 const DB_PATH = join(DATA_DIR, 'erdb.db');
 
 const SCHEMA_SQL = `
@@ -44,6 +44,9 @@ const openDatabase = () => {
   mkdirSync(DATA_DIR, { recursive: true });
   const db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('wal_autocheckpoint = 1000');
+  db.pragma('journal_size_limit = 67108864');
   db.pragma('foreign_keys = ON');
   return db;
 };

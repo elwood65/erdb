@@ -2,6 +2,161 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.13](https://github.com/realbestia1/erdb/compare/v0.3.12...v0.3.13) - 2026-04-04
+
+- fix(poster): resolve IMDb poster fallback and original-language image selection ([c801899](https://github.com/realbestia1/erdb/commit/c80189956f38f9a798a858c567b9c68ec893ab63))
+  - fix IMDb poster resolution for titles that expose a valid TMDB match but return an empty `images.posters` collection for the requested language
+  - fallback to TMDB `poster_path` / `backdrop_path` when the localized image collection is empty instead of returning `404 Image not found`
+  - fix `posterLang=original` so `include_image_language` is resolved from the media's real `original_language` after TMDB lookup, rather than incorrectly reusing the request language
+  - unify original-language handling across poster/backdrop/logo image language resolution with shared helpers
+  - improve TMDB ID resolution so IMDb IDs can also map through `tv_episode_results` when TMDB classifies the external ID as an episode
+  - bump package/app version from `0.3.12` to `0.3.13`
+
+## [0.3.12](https://github.com/realbestia1/erdb/compare/v0.3.11...v0.3.12) - 2026-04-03
+
+- feat(images): add anime-specific backdrop and logo language controls and fix localized artwork selection ([933f724](https://github.com/realbestia1/erdb/commit/933f724b524081d5fde77216eb51e08c20200c07))
+  - add `Backdrop Language` and `Backdrop Language Anime` controls across UI, config import/export, proxy config, token config, and server-side rendering
+  - add `Logo Language` and `Logo Language Anime` controls across UI, config import/export, proxy config, token config, and server-side rendering
+  - add `Backdrop Text Anime` and wire it through preview, saved config, proxy forwarding, and server-side backdrop selection
+  - rename poster text mode `original` to `default` while preserving backward compatibility for legacy `original` query/config values
+  - make poster and backdrop `default` resolve to the default artwork for the selected language
+  - make poster and backdrop `alternative` exclude the current default artwork and prefer a different artwork in the same selected language
+  - fix the case where `Backdrop Text` `default` and `clean` could resolve to the same image
+  - fix build and type issues introduced during the language/text-mode expansion
+  - rename the dynamic image route handler from `route.tsx` to `route.ts` to restore a clean Next.js production build
+  - bump project version from `0.3.11` to `0.3.12`
+
+## [0.3.11](https://github.com/realbestia1/erdb/compare/v0.3.10...v0.3.11) - 2026-04-03
+
+- build error fix ([e56d637](https://github.com/realbestia1/erdb/commit/e56d6373eb0de46eb389c864aa1db41523b76cec))
+
+## [0.3.10](https://github.com/realbestia1/erdb/compare/v0.3.9...v0.3.10) - 2026-04-03
+
+- fix(poster): rename original to default and fix localized alternative poster selection txt ([ba39b41](https://github.com/realbestia1/erdb/commit/ba39b414dade7fb628128d9f84dc9e371c1c8fad))
+  - rename poster text mode `original` to `default` across UI and server-side poster selection
+  - preserve backward compatibility by normalizing legacy `original` query/config values to `default`
+  - make `default` resolve to the default poster for the selected poster language
+  - make `alternative` exclude the current default poster and prefer a different poster in the same selected language
+  - update configurator labels and inline docs from `original` to `default`
+  - bump project version from `0.3.9` to `0.3.10`
+
+## [0.3.9](https://github.com/realbestia1/erdb/compare/v0.3.8...v0.3.9) - 2026-04-03
+
+- fix(poster): resolve clean poster logo/title fallback for regional locales ([50321e2](https://github.com/realbestia1/erdb/commit/50321e2cc8b418322174d5f16520bca232079537))
+  - fix TMDB translation fallback so regional locales resolve through a base-language chain like `it-IT -> it -> en`
+  - add a reusable fallback-chain helper for localized TMDB detail requests
+  - always include `include_image_language` for poster image/logo fetches
+  - improve clean poster logo selection so the chosen logo must actually match the requested language or its base language
+  - continue fallback lookup when the initially selected logo is present but not language-compatible
+  - update poster image fallback requests to use the same image-language constraints
+  - bump final image renderer cache version to `v62` to invalidate stale cached poster outputs
+  - bump project version from `0.3.8` to `0.3.9`
+
+## [0.3.8](https://github.com/realbestia1/erdb/compare/v0.3.7...v0.3.8) - 2026-04-03
+
+- fix(poster): handle regional locale fallback for clean title overlay ([bd90a19](https://github.com/realbestia1/erdb/commit/bd90a196e4dd1becfd4ac21a96c6cfa7064a96da))
+  - fix TMDB translation fallback in `app/[type]/[id]/route.tsx`
+  - derive the base language from the normalized locale before evaluating translation fallbacks
+  - allow regional locales like `it-IT` to correctly resolve base-language translations like `it`
+  - bump project version from `0.3.7` to `0.3.8`
+  - bump final image renderer cache version from `v58` to `v59` to invalidate stale cached poster outputs
+  - add changelog entry for `0.3.8`
+
+## [0.3.7](https://github.com/realbestia1/erdb/compare/v0.3.6...v0.3.7) - 2026-04-03
+
+- Improve SQLite WAL management in v0.3.7 ([8c1ca2c](https://github.com/realbestia1/erdb/commit/8c1ca2c82b474622248d605a2c7f358b406b7369))
+  - improve SQLite WAL handling for erdb.db by enabling synchronous NORMAL, wal_autocheckpoint, and journal_size_limit
+  - run wal_checkpoint(TRUNCATE) after IMDb import jobs to prevent erdb.db-wal from growing indefinitely after large write operations
+  - reduce the risk of oversized WAL files during heavy cache writes and dataset imports
+
+## [0.3.6](https://github.com/realbestia1/erdb/compare/v0.3.5...v0.3.6) - 2026-04-03
+
+- Improve poster language handling and bump to v0.3.6 ([bdef6dd](https://github.com/realbestia1/erdb/commit/bdef6ddcc0fb025532783d8a98fd50d3dbc1991a))
+  - add a separate Poster Language Anime option in the same poster language box
+  - wire posterAnimeLang through preview, config import/export, token config, proxy forwarding, and server-side rendering
+  - fix poster original/native language selection so it no longer falls back to localized poster_path when global language is set
+  - improve anime poster handling so Poster Text Anime and Poster Language Anime are resolved independently from the standard poster settings
+  - rename the poster language Original label to Native Language in the configurator UI
+  - fix token persistence for Thumbnail Ratings Style
+  - change MDBList badge accent/border color from orange to white
+  - bump package/app version to 0.3.6
+
+## [0.3.5](https://github.com/realbestia1/erdb/compare/v0.3.4...v0.3.5) - 2026-04-03
+
+- Add backdrop ratings size support and bump to v0.3.5 ([f8eb982](https://github.com/realbestia1/erdb/commit/f8eb9824915fdb235cef15f41a7ef2935da1f26b))
+  - add a new backdropRatingsSize option with Standard and Large modes
+  - expose the new control in the workspace/configurator UI for backdrop previews
+  - persist backdropRatingsSize through config export/import and token-backed config flows
+  - forward backdropRatingsSize through the proxy and token-aware image generation pipeline
+  - apply the new size option in the backdrop renderer without affecting thumbnail sizing behavior
+  - fix final image cache key generation so changing backdropRatingsSize invalidates cached renders correctly
+  - bump package/app version to 0.3.5
+
+## [0.3.4](https://github.com/realbestia1/erdb/compare/v0.3.3...v0.3.4) - 2026-04-03
+
+- Bump version to 0.3.4; fix thumbnail badge ([fe2e2a4](https://github.com/realbestia1/erdb/commit/fe2e2a448223a26f3345a273706a7d5178c8e049))
+  Update project version to 0.3.4 (package.json and UI reference) and adjust route image badge logic: only use thumbnailVerticalBadgeContent when the thumbnail rating layout is vertical, otherwise fall back to 'standard'. Also updated build metadata (tsconfig.tsbuildinfo).
+
+## [0.3.3](https://github.com/realbestia1/erdb/compare/v0.3.2...v0.3.3) - 2026-04-03
+
+- Bump package to 0.3.3; fix backdrop badge layout ([2502917](https://github.com/realbestia1/erdb/commit/25029174080311ef786450d173321c955d386222))
+  Import and use isVerticalBackdropRatingLayout in app/[type]/[id]/route.tsx so backdrop badge content uses the vertical variant only when backdropRatingsLayout is vertical (falls back to 'standard' otherwise). Update components/home-page.tsx to reflect currentVersion 0.3.3 and bump package version in package.json/package-lock.json. tsconfig.tsbuildinfo updated by the build. This fixes incorrect badge selection for backdrop images and publishes a patch version bump.
+
+## [0.3.2](https://github.com/realbestia1/erdb/compare/v0.3.1...v0.3.2) - 2026-04-03
+
+- Fix poster token badge layout so stacked is ignored for non-vertical poster layouts ([13e1967](https://github.com/realbestia1/erdb/commit/13e196797ff88c86ba3ae91f9f78718080905612))
+  Updated the poster render pipeline to apply verticalBadgeContent=stacked only when posterRatingsLayout is vertical (left, right, or left-right).
+
+  This prevents tokens using Poster Layout=top from incorrectly rendering poster badges in stacked mode when a lingering verticalBadgeContent=stacked value is present in the token or imported config.
+
+## [0.3.1](https://github.com/realbestia1/erdb/compare/v0.3.0...v0.3.1) - 2026-04-03
+
+- Add token-based accounts and workspace APIs ([9244088](https://github.com/realbestia1/erdb/commit/924408803cf9ba549268bd540fd8ff0ee93e5b04))
+  Introduce a token-based account system and workspace flow. Adds new API endpoints (/api/token, /api/workspace-auth, /api/workspace-config) and libraries to manage tokens, accounts, and workspace sessions, plus an accounts DB. Make renderer and proxy token-aware: image routes accept/respect token configs, proxy can build config from a token, and cache/version seeding uses token update timestamps. Update configurator and docs/UI to support login/registration, persistent active token, token-driven preview/proxy patterns, and workspace session handling. Minor docs and .env.example updates (ERDB_DATA_DIR) to reflect the new workspace/token features.
+- rollback ([18c5a8e](https://github.com/realbestia1/erdb/commit/18c5a8ee9f753dcaf690c34a3c33743c18897f1a))
+
+## [0.3.0](https://github.com/realbestia1/erdb/compare/v0.2.12...v0.3.0) - 2026-04-03
+
+- Add token-based accounts, API & workspace UI ([9abcadb](https://github.com/realbestia1/erdb/commit/9abcadb4a5b60d414fdb7ff6731488f76416e877))
+  Introduce a token-based account system and workspace flow. Adds new API endpoints (/api/token, /api/workspace-auth, /api/workspace-config) and libraries to manage tokens, accounts, and workspace sessions. The image renderer and proxy were updated to resolve per-token configuration server-side (token-aware routes and proxy config builders), and cache/versioning now uses token update timestamps. The configurator and home UI were updated to support login/registration, persistent active token, token-driven preview/proxy patterns, and workspace session handling. Minor docs and .env.example updates included (ERDB_DATA_DIR).
+
+## [0.2.12](https://github.com/realbestia1/erdb/compare/v0.2.11...v0.2.12) - 2026-04-02
+
+- Bump version to 0.2.12 and normalize path split ([65e7701](https://github.com/realbestia1/erdb/commit/65e77012f9ea256c6bdc5b1d51c77c1c831f8479))
+  Update package.json version to 0.2.12 and update the HomePage currentVersion string accordingly. Improve getFilePath by splitting keys on both forward and backslashes (/ and \) before sanitizing segments to handle Windows and mixed-path separators correctly.
+
+## [0.2.11](https://github.com/realbestia1/erdb/compare/v0.2.10...v0.2.11) - 2026-04-02
+
+- Add thumbnail rating style and bump version ([8581d4f](https://github.com/realbestia1/erdb/commit/8581d4f2613cb0518cc0c88a82895372d8c4aba8))
+  Introduce thumbnailRatingStyle handling in HomePage: include it in the preview-type rating selection logic, add it to the exported state list, and persist it to the config. Also update the in-component currentVersion and bump the package version to 0.2.11.
+
+## [0.2.10](https://github.com/realbestia1/erdb/compare/v0.2.9...v0.2.10) - 2026-04-02
+
+- Add thumbnailRatingStyle support ([42c6ae4](https://github.com/realbestia1/erdb/commit/42c6ae4a811b5caf4b60bd16f8e903f48ab31f1f))
+  Introduce per-type thumbnail rating style handling so thumbnails can use an independent ratingStyle. Changes include:
+
+  - app/[type]/[id]/route.tsx: parse a global rating style param and per-type overrides (poster, backdrop, thumbnail, logo) and choose the appropriate style based on imageType.
+  - components/home-page.tsx: add thumbnailRatingStyle state, wire it into aiometadata pattern building, config serialization, payload handling, preview selection, and UI handlers; update currentVersion to 0.2.10.
+  - lib/aiIntegrationPrompt.ts: document new poster/backdrop/thumbnail/logo ratingStyle params and update URL build logic to consider thumbnailRatingStyle.
+  - package.json: bump package version to 0.2.10.
+
+  These changes allow explicit control over thumbnail rating visuals without affecting backdrop or poster styles.
+
+## [0.2.9](https://github.com/realbestia1/erdb/compare/v0.2.8...v0.2.9) - 2026-04-02
+
+- Improve proxy error handling and fetch retry ([6e0b190](https://github.com/realbestia1/erdb/commit/6e0b190bcec7bd3626eee27ec6796fd89105f487))
+  Wrap proxy GET handler in a try/catch and return a 500 on unexpected errors. Read upstream responses as arrayBuffer and decode with TextDecoder before JSON.parse to avoid re-reading streamed bodies, and reuse the decoded buffer for passthrough/error responses while preserving CORS headers. Increase default fetchWithRetry timeout to 15000ms and expand recognized timeout/network error codes to improve resilience. Bump package version to 0.2.9 and update displayed currentVersion in the UI.
+
+## [0.2.8](https://github.com/realbestia1/erdb/compare/v0.2.7...v0.2.8) - 2026-04-02
+
+- Improve Docker font handling and image response types ([3f2033f](https://github.com/realbestia1/erdb/commit/3f2033f99d1cb7a922747d337360f439ec8031b0))
+  Update Dockerfiles to skip automatic font install by default (ERDB_SKIP_FONT_INSTALL) and add bash/curl to Alpine deps; copy and execute scripts/install-fonts-linux.sh (with chmod) in build/runtime images so fonts are installed reliably. Refactor server image rendering flow in app/[type]/[id]/route.tsx: change in-flight maps to carry RenderedImagePayload, return payload objects from internal branches, and centralize the final respond(...) call to ensure consistent response construction. Also bump app version to 0.2.8 (package.json) and update displayed currentVersion in the home page component.
+
+## [0.2.7](https://github.com/realbestia1/erdb/compare/v0.2.6...v0.2.7) - 2026-04-02
+
+- Add custom logo variants and caching ([88ce2c3](https://github.com/realbestia1/erdb/commit/88ce2c3c01295d72d29043f4da204bc002a8de88))
+  Introduce custom logo generation and variant support with SVG output, selectable font variants, and custom primary/secondary/outline colors. Adds in-memory + object-storage caching for generated logo variants, new cache keys/TTL, and storage read/write helpers; integrates custom-logo and ratings-only modes into the rendering pipeline and query params (logoMode, logoFontVariant, logoPrimary/Secondary/Outline). Improve title localization by picking translated titles from TMDB translations, bump final image renderer cache version, and standardize response/cache headers. Also add a docs AI integration prompt and copy button component, expose new logo options in the docs and home view types, and include various small refactors to image rendering, cache keys, and object storage behavior.
+
 ## [0.2.6](https://github.com/realbestia1/erdb/compare/v0.2.5...v0.2.6) - 2026-04-02
 
 - fix: prevent preview image clipping on zoom ([425f863](https://github.com/realbestia1/erdb/commit/425f863d25c1c194ee2e8a2c8cf5858ec5ba6020))

@@ -9,6 +9,7 @@ import {
 } from '@/lib/ratingPreferences';
 import {
   DEFAULT_BACKDROP_RATING_LAYOUT,
+  isVerticalBackdropRatingLayout,
   normalizeBackdropRatingLayout,
   type BackdropRatingLayout,
 } from '@/lib/backdropRatingLayout';
@@ -23,15 +24,28 @@ import {
   type ThumbnailSize,
 } from '@/lib/thumbnailSize';
 import {
+  normalizeBackdropRatingsSize,
+  type BackdropRatingsSize,
+} from '@/lib/backdropRatingsSize';
+import {
   DEFAULT_POSTER_RATINGS_MAX_PER_SIDE,
   DEFAULT_POSTER_RATING_LAYOUT,
   getPosterRatingLayoutMaxBadges,
   getPosterRatingLayoutLimit,
+  isVerticalPosterRatingLayout,
   normalizePosterRatingLayout,
   normalizePosterRatingsMaxPerSide,
   type PosterRatingLayout,
 } from '@/lib/posterRatingLayout';
 import { normalizeLogoRatingsMax } from '@/lib/logoRatingsMax';
+import { DEFAULT_LOGO_MODE, normalizeLogoMode, type LogoMode } from '@/lib/logoMode';
+import { DEFAULT_LOGO_FONT_VARIANT, normalizeLogoFontVariant, type LogoFontVariant } from '@/lib/logoFontVariant';
+import {
+  DEFAULT_LOGO_CUSTOM_PRIMARY,
+  DEFAULT_LOGO_CUSTOM_OUTLINE,
+  DEFAULT_LOGO_CUSTOM_SECONDARY,
+  normalizeHexColor,
+} from '@/lib/logoCustomColors';
 import {
   DEFAULT_RATING_STYLE,
   normalizeRatingStyle,
@@ -55,10 +69,12 @@ import {
 } from '@/lib/objectStorage';
 import { getMetadata, setMetadata } from '@/lib/metadataCache';
 import { fetchWithRetry } from '@/lib/request';
+import { buildPublicImageCacheControl } from '@/lib/imageCacheTtl';
+import { getTokenConfig } from '@/lib/tokens';
 
 export const runtime = 'nodejs';
 
-type PosterTextPreference = 'original' | 'clean' | 'alternative';
+type PosterTextPreference = 'default' | 'clean' | 'alternative';
 type RenderImageType = 'poster' | 'backdrop' | 'logo' | 'thumbnail';
 type AnimeMappingProvider = 'mal' | 'anilist' | 'imdb' | 'tmdb' | 'anidb';
 type AiometadataEpisodeProvider = 'tvdb' | 'realimdb';
@@ -127,7 +143,42 @@ const parseNonNegativeInt = (value?: string | null, max = Number.MAX_SAFE_INTEGE
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return Math.min(max, Math.floor(parsed));
 };
-const FINAL_IMAGE_RENDERER_CACHE_VERSION = 'poster-backdrop-logo-thumbnail-v54';
+const getTmdbLanguageFallbackChain = (requestedLanguage?: string | null, fallbackLanguage: string = FALLBACK_IMAGE_LANGUAGE) => {
+  const requested = normalizeTmdbLanguageCode(requestedLanguage);
+  const requestedBase = getTmdbLanguageBase(requested);
+  const fallback = normalizeTmdbLanguageCode(fallbackLanguage);
+  const fallbackBase = getTmdbLanguageBase(fallback);
+
+  return [...new Set([requested, requestedBase, fallback, fallbackBase].filter(Boolean) as string[])];
+};
+const isOriginalLanguageSetting = (value?: string | null) =>
+  String(value || '').trim().toLowerCase() === 'original';
+
+const resolveRequestedImageLanguage = (input: {
+  configuredLanguage?: string | null;
+  requestLanguage?: string | null;
+  fallbackLanguage: string;
+}) =>
+  normalizeTmdbLanguageCode(
+    isOriginalLanguageSetting(input.configuredLanguage)
+      ? input.requestLanguage
+      : input.configuredLanguage || input.requestLanguage
+  ) || input.fallbackLanguage;
+
+const resolveOriginalAwareImageLanguage = (input: {
+  configuredLanguage?: string | null;
+  requestLanguage?: string | null;
+  mediaOriginalLanguage?: string | null;
+  fallbackLanguage: string;
+}) =>
+  normalizeTmdbLanguageCode(
+    isOriginalLanguageSetting(input.configuredLanguage) && input.mediaOriginalLanguage
+      ? input.mediaOriginalLanguage
+      : input.configuredLanguage || input.requestLanguage
+  ) ||
+  normalizeTmdbLanguageCode(input.requestLanguage) ||
+  input.fallbackLanguage;
+const FINAL_IMAGE_RENDERER_CACHE_VERSION = 'poster-backdrop-logo-thumbnail-v62';
 const TMDB_CACHE_TTL_MS = parseCacheTtlMs(
   process.env.ERDB_TMDB_CACHE_TTL_MS,
   3 * 24 * 60 * 60 * 1000,
@@ -193,10 +244,17 @@ const PROVIDER_ICON_CACHE_TTL_MS = parseCacheTtlMs(
   60 * 60 * 1000,
   30 * 24 * 60 * 60 * 1000
 );
+const GENERATED_LOGO_VARIANT_CACHE_TTL_MS = parseCacheTtlMs(
+  process.env.ERDB_GENERATED_LOGO_CACHE_TTL_MS,
+  30 * 24 * 60 * 60 * 1000,
+  60 * 60 * 1000,
+  365 * 24 * 60 * 60 * 1000
+);
 const FINAL_IMAGE_CACHE_MAX_ENTRIES = 300;
 const SOURCE_IMAGE_CACHE_MAX_ENTRIES = 128;
 const METADATA_CACHE_MAX_ENTRIES = 2000;
 const PROVIDER_ICON_CACHE_MAX_ENTRIES = 64;
+const GENERATED_LOGO_VARIANT_CACHE_MAX_ENTRIES = 256;
 const TMDB_ANIMATION_GENRE_ID = 16;
 const MDBLIST_API_KEYS = parseApiKeyList(process.env.MDBLIST_API_KEYS, process.env.MDBLIST_API_KEY);
 const SIMKL_CLIENT_ID =
@@ -270,6 +328,8 @@ const metadataInFlight = new Map<string, Promise<CachedJsonResponse>>();
 const providerIconInFlight = new Map<string, Promise<string | null>>();
 const streamBadgesInFlight = new Map<string, Promise<StreamBadgesResult>>();
 const mdbListRateLimitedUntil = new Map<string, number>();
+const generatedLogoVariantCache = new Map<string, { dataUrl: string; aspectRatio: number }>();
+const generatedLogoVariantInFlight = new Map<string, Promise<{ dataUrl: string; aspectRatio: number }>>();
 let mdbListApiKeyCursor = 0;
 const sha1Hex = (value: string) => createHash('sha1').update(value).digest('hex');
 const buildSecretCacheSeed = (name: string, value?: string | null) => {
@@ -332,6 +392,46 @@ const getCacheTtlMsFromCacheControl = (value: string | null | undefined, fallbac
   }
 
   return fallbackMs;
+};
+
+const getGeneratedLogoVariantCacheKey = (
+  title: string,
+  logoFontVariant: LogoFontVariant,
+  primaryColor: string,
+  secondaryColor: string,
+  outlineColor: string
+) =>
+  JSON.stringify({
+    title: title.trim(),
+    logoFontVariant,
+    primaryColor: normalizeHexColor(primaryColor, DEFAULT_LOGO_CUSTOM_PRIMARY),
+    secondaryColor: normalizeHexColor(secondaryColor, DEFAULT_LOGO_CUSTOM_SECONDARY),
+    outlineColor: normalizeHexColor(outlineColor, DEFAULT_LOGO_CUSTOM_OUTLINE),
+  });
+
+const getCachedGeneratedLogoVariant = (cacheKey: string) => {
+  const cached = generatedLogoVariantCache.get(cacheKey);
+  if (!cached) return null;
+
+  // Refresh insertion order for simple LRU behavior.
+  generatedLogoVariantCache.delete(cacheKey);
+  generatedLogoVariantCache.set(cacheKey, cached);
+  return cached;
+};
+
+const setCachedGeneratedLogoVariant = (
+  cacheKey: string,
+  value: { dataUrl: string; aspectRatio: number }
+) => {
+  generatedLogoVariantCache.set(cacheKey, value);
+  if (generatedLogoVariantCache.size <= GENERATED_LOGO_VARIANT_CACHE_MAX_ENTRIES) {
+    return;
+  }
+
+  const oldestKey = generatedLogoVariantCache.keys().next().value;
+  if (oldestKey) {
+    generatedLogoVariantCache.delete(oldestKey);
+  }
 };
 
 
@@ -1350,15 +1450,58 @@ const pickKitsuOriginalTitle = (attributes: any) => {
 const pickPosterTitleFromMedia = (
   media: any,
   mediaType: 'movie' | 'tv' | null,
-  fallbackTitle?: string | null
+  fallbackTitle?: string | null,
+  preferredLang?: string | null,
+  fallbackLang: string = FALLBACK_IMAGE_LANGUAGE,
+  fallbackMedia?: any
 ) => {
+  const pickLocalizedTitleFromTranslations = (source: any, language: string | null | undefined) => {
+    const normalizedLanguage = normalizeTmdbLanguageCode(language);
+    if (!normalizedLanguage) return null;
+    const normalizedLanguageBase = getTmdbLanguageBase(normalizedLanguage);
+
+    const translations = Array.isArray(source?.translations?.translations)
+      ? source.translations.translations
+      : [];
+    const exactMatch = translations.find(
+      (entry: any) => normalizeTmdbLanguageCode(entry?.iso_639_1 && entry?.iso_3166_1
+        ? `${entry.iso_639_1}-${entry.iso_3166_1}`
+        : entry?.iso_639_1) === normalizedLanguage
+    );
+    const baseMatch = !exactMatch
+      ? translations.find(
+        (entry: any) => getTmdbLanguageBase(entry?.iso_639_1) === normalizedLanguageBase
+      )
+      : null;
+    const selected = exactMatch || baseMatch;
+    if (!selected) return null;
+
+    const data = selected.data || {};
+    const candidate =
+      mediaType === 'movie'
+        ? data.title || data.name || data.original_title || data.original_name
+        : data.name || data.title || data.original_name || data.original_title;
+    if (typeof candidate !== 'string') return null;
+    const normalized = candidate.replace(/\s+/g, ' ').trim();
+    return normalized || null;
+  };
+
   const candidates = [
+    pickLocalizedTitleFromTranslations(media, preferredLang),
     mediaType === 'movie' ? media?.title : mediaType === 'tv' ? media?.name : null,
+    pickLocalizedTitleFromTranslations(fallbackMedia, preferredLang),
+    mediaType === 'movie' ? fallbackMedia?.title : mediaType === 'tv' ? fallbackMedia?.name : null,
+    pickLocalizedTitleFromTranslations(media, fallbackLang),
+    pickLocalizedTitleFromTranslations(fallbackMedia, fallbackLang),
     mediaType === 'movie' ? media?.original_title : mediaType === 'tv' ? media?.original_name : null,
     media?.title,
     media?.name,
+    fallbackMedia?.title,
+    fallbackMedia?.name,
     media?.original_title,
     media?.original_name,
+    fallbackMedia?.original_title,
+    fallbackMedia?.original_name,
     fallbackTitle,
   ];
   for (const candidate of candidates) {
@@ -1372,6 +1515,11 @@ const pickPosterTitleFromMedia = (
 const fetchKitsuFallbackAsset = async (
   kitsuId: string,
   imageType: RenderImageType,
+  logoMode: LogoMode,
+  logoFontVariant: LogoFontVariant,
+  logoPrimary: string,
+  logoSecondary: string,
+  logoOutline: string,
   phases: PhaseDurations
 ) => {
   const normalizedKitsuId = String(kitsuId || '').trim();
@@ -1386,7 +1534,12 @@ const fetchKitsuFallbackAsset = async (
   const originalTitle = pickKitsuOriginalTitle(attributes);
 
   if (imageType === 'logo' && originalTitle) {
-    const generatedLogo = buildGeneratedLogoDataUrl(originalTitle);
+    const generatedLogo =
+      logoMode === 'custom-logo'
+        ? await buildGeneratedLogoVariantDataUrl(originalTitle, logoFontVariant, logoPrimary, logoSecondary, logoOutline)
+        : logoMode === 'ratings-only'
+          ? { dataUrl: buildTransparentLogoDataUrl(), aspectRatio: 2.4 }
+          : buildGeneratedLogoDataUrl(originalTitle);
     return {
       imageUrl: generatedLogo.dataUrl,
       rating,
@@ -1863,6 +2016,23 @@ const pickByLanguageWithFallback = (
   return items[0];
 };
 
+const matchesImageLanguage = (item: any, language: string | null | undefined) => {
+  const normalizedLanguage = normalizeTmdbLanguageCode(language);
+  if (!normalizedLanguage) {
+    return false;
+  }
+
+  const itemLanguage = normalizeTmdbLanguageCode(getImageLanguageTag(item));
+  if (!itemLanguage) {
+    return false;
+  }
+
+  return (
+    itemLanguage === normalizedLanguage ||
+    getTmdbLanguageBase(itemLanguage) === getTmdbLanguageBase(normalizedLanguage)
+  );
+};
+
 const isTextlessPosterSelection = (posters: any[] = [], selectedPoster?: any | null) => {
   if (!Array.isArray(posters) || posters.length === 0 || !selectedPoster?.file_path) return false;
 
@@ -1879,19 +2049,25 @@ const pickPosterByPreference = (
   fallbackLang: string,
   originalPosterPath?: string | null
 ) => {
-  if (!Array.isArray(posters) || posters.length === 0) return null;
+  if (!Array.isArray(posters) || posters.length === 0) {
+    return originalPosterPath ? { file_path: originalPosterPath } : null;
+  }
 
   const canonicalOriginalPath =
-    pickByLanguageWithFallback(posters, preferredLang, fallbackLang, originalPosterPath)?.file_path ||
     originalPosterPath ||
+    pickByLanguageWithFallback(posters, preferredLang, fallbackLang)?.file_path ||
     posters[0]?.file_path ||
     null;
   const originalPoster = canonicalOriginalPath
     ? posters.find((poster: any) => poster.file_path === canonicalOriginalPath)
     : null;
   const fallbackOriginal = originalPoster || (canonicalOriginalPath ? { file_path: canonicalOriginalPath } : posters[0]);
+  const defaultPoster =
+    pickByLanguageWithFallback(posters, preferredLang, fallbackLang) ||
+    fallbackOriginal;
+  const defaultPosterPath = defaultPoster?.file_path || canonicalOriginalPath;
   const alternativePosters = posters.filter(
-    (poster: any) => poster.file_path !== canonicalOriginalPath
+    (poster: any) => poster.file_path !== defaultPosterPath
   );
 
   if (preference === 'clean') {
@@ -1902,12 +2078,13 @@ const pickPosterByPreference = (
     );
   }
 
-  if (preference === 'original') {
-    return fallbackOriginal;
+  if (preference === 'default') {
+    return defaultPoster;
   }
 
   return (
-    pickByLanguageWithFallback(alternativePosters, preferredLang, fallbackLang) ||
+    pickByLanguageWithFallback(alternativePosters, preferredLang, '') ||
+    pickByLanguageWithFallback(alternativePosters, fallbackLang, '') ||
     alternativePosters[0] ||
     fallbackOriginal
   );
@@ -1920,10 +2097,12 @@ const pickBackdropByPreference = (
   fallbackLang: string,
   originalBackdropPath?: string | null
 ) => {
-  if (!Array.isArray(backdrops) || backdrops.length === 0) return null;
+  if (!Array.isArray(backdrops) || backdrops.length === 0) {
+    return originalBackdropPath ? { file_path: originalBackdropPath } : null;
+  }
 
   const canonicalOriginalPath =
-    pickByLanguageWithFallback(backdrops, preferredLang, fallbackLang, originalBackdropPath)?.file_path ||
+    pickByLanguageWithFallback(backdrops, preferredLang, fallbackLang)?.file_path ||
     originalBackdropPath ||
     backdrops[0]?.file_path ||
     null;
@@ -1932,8 +2111,12 @@ const pickBackdropByPreference = (
     : null;
   const fallbackOriginal =
     originalBackdrop || (canonicalOriginalPath ? { file_path: canonicalOriginalPath } : backdrops[0]);
+  const defaultBackdrop =
+    pickByLanguageWithFallback(backdrops, preferredLang, fallbackLang) ||
+    fallbackOriginal;
+  const defaultBackdropPath = defaultBackdrop?.file_path || canonicalOriginalPath;
   const alternativeBackdrops = backdrops.filter(
-    (backdrop: any) => backdrop.file_path !== canonicalOriginalPath
+    (backdrop: any) => backdrop.file_path !== defaultBackdropPath
   );
 
   if (preference === 'clean') {
@@ -1944,12 +2127,13 @@ const pickBackdropByPreference = (
     );
   }
 
-  if (preference === 'original') {
-    return fallbackOriginal;
+  if (preference === 'default') {
+    return defaultBackdrop;
   }
 
   return (
-    pickByLanguageWithFallback(alternativeBackdrops, preferredLang, fallbackLang) ||
+    pickByLanguageWithFallback(alternativeBackdrops, preferredLang, '') ||
+    pickByLanguageWithFallback(alternativeBackdrops, fallbackLang, '') ||
     alternativeBackdrops[0] ||
     fallbackOriginal
   );
@@ -1991,6 +2175,7 @@ type FastRenderInput = {
   posterRatingsLayout: PosterRatingLayout;
   posterRatingsMaxPerSide: number | null;
   backdropRatingsLayout: BackdropRatingLayout | ThumbnailRatingLayout;
+  backdropRatingsSize: BackdropRatingsSize;
   thumbnailRatingsLayout: ThumbnailRatingLayout;
   thumbnailSize: ThumbnailSize;
   verticalBadgeContent: 'standard' | 'stacked';
@@ -2067,6 +2252,9 @@ const isTmdbSourceImageUrl = (value: string) => {
 const buildProviderIconStorageKey = (iconUrl: string, iconCornerRadius = 0) =>
   `icons/${sha1Hex(`${iconUrl}|r:${iconCornerRadius}`)}.png`;
 
+const buildGeneratedLogoVariantStorageKey = (cacheKey: string) =>
+  `customlogos/${sha1Hex(cacheKey)}.svg`;
+
 const readProviderIconFromStorage = async (
   iconUrl: string,
   iconCornerRadius = 0
@@ -2100,6 +2288,40 @@ const writeProviderIconToStorage = async (
   } catch {
     // Ignore icon cache write failures.
   }
+};
+
+const readGeneratedLogoVariantFromStorage = async (cacheKey: string) => {
+  if (!isObjectStorageConfigured()) return null;
+  try {
+    const payload = await getCachedImageFromObjectStorage(buildGeneratedLogoVariantStorageKey(cacheKey));
+    if (!payload) return null;
+    const svg = Buffer.from(payload.body).toString('utf8');
+    return {
+      dataUrl: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+      aspectRatio: LOGO_BASE_HEIGHT > 0 ? Math.max(1, extractSvgWidth(svg)) / LOGO_BASE_HEIGHT : 2.5,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeGeneratedLogoVariantToStorage = async (cacheKey: string, svg: string) => {
+  if (!isObjectStorageConfigured()) return;
+  try {
+    await putCachedImageToObjectStorage(buildGeneratedLogoVariantStorageKey(cacheKey), {
+      body: bufferToArrayBuffer(Buffer.from(svg, 'utf8')),
+      contentType: 'image/svg+xml',
+      cacheControl: buildSourceImageFallbackCacheControl(GENERATED_LOGO_VARIANT_CACHE_TTL_MS),
+    });
+  } catch {
+    // Ignore generated logo cache write failures.
+  }
+};
+
+const extractSvgWidth = (svg: string) => {
+  const match = svg.match(/\bwidth="(\d+)"/i);
+  const parsed = match ? Number.parseInt(match[1], 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 800;
 };
 
 const pickTmdbImageSize = (imageType: RenderImageType, outputWidth: number) => {
@@ -2370,6 +2592,388 @@ const buildGeneratedLogoDataUrl = (title: string) => {
     dataUrl: `data:image/svg+xml,${encodeURIComponent(svg)}`,
     aspectRatio,
   };
+};
+
+const buildTransparentLogoDataUrl = () =>
+  `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8"></svg>')}`;
+
+const GENERATED_LOGO_FONT_VARIANTS: Array<{
+  id: LogoFontVariant;
+  fontFamily: string;
+  fill: string;
+  stroke: string;
+  strokeOpacity?: number;
+  weight: number;
+  italic?: boolean;
+  letterSpacingFactor: number;
+  uppercase?: boolean;
+  skewX?: number;
+  topPaddingFactor?: number;
+  bottomPaddingFactor?: number;
+  fillMode?: 'solid' | 'gradient' | 'outline';
+  gradientStops?: Array<{ offset: string; color: string }>;
+  shadow?: { dy: number; stdDeviation: number; color: string; opacity: number };
+}> = [
+    {
+      id: 'spicy-sale',
+      fontFamily: "'Spicy Sale','Rubik Spray Paint','Impact',sans-serif",
+      fill: '#fff7ed',
+      stroke: 'rgba(190,24,93,0.92)',
+      strokeOpacity: 0.92,
+      weight: 400,
+      letterSpacingFactor: 0.012,
+      uppercase: false,
+      skewX: -3,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#fde68a' },
+        { offset: '55%', color: '#fb7185' },
+        { offset: '100%', color: '#c084fc' },
+      ],
+      shadow: { dy: 1, stdDeviation: 7, color: '#ec4899', opacity: 0.4 },
+    },
+    {
+      id: 'somelist',
+      fontFamily: "'Somelist','Spicy Sale','Impact',sans-serif",
+      fill: '#f0fdf4',
+      stroke: 'rgba(8,145,178,0.84)',
+      strokeOpacity: 0.8,
+      weight: 400,
+      letterSpacingFactor: 0.008,
+      uppercase: false,
+      skewX: -1,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#bbf7d0' },
+        { offset: '100%', color: '#67e8f9' },
+      ],
+      shadow: { dy: 0, stdDeviation: 6, color: '#22d3ee', opacity: 0.28 },
+    },
+    {
+      id: 'rubik-spray-paint',
+      fontFamily: "'Rubik Spray Paint','Dokdo','Impact',sans-serif",
+      fill: '#fef08a',
+      stroke: 'rgba(120,53,15,0.9)',
+      weight: 400,
+      letterSpacingFactor: 0.01,
+      uppercase: true,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#fde68a' },
+        { offset: '100%', color: '#f97316' },
+      ],
+      shadow: { dy: 3, stdDeviation: 6, color: '#fb923c', opacity: 0.32 },
+    },
+    {
+      id: 'nabla',
+      fontFamily: "'Nabla','Monoton','Impact',sans-serif",
+      fill: '#ddd6fe',
+      stroke: 'rgba(76,29,149,0.92)',
+      weight: 400,
+      letterSpacingFactor: 0.02,
+      uppercase: true,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#e9d5ff' },
+        { offset: '100%', color: '#60a5fa' },
+      ],
+      shadow: { dy: 0, stdDeviation: 8, color: '#8b5cf6', opacity: 0.34 },
+    },
+    {
+      id: 'honk',
+      fontFamily: "'Honk','Nabla','Impact',sans-serif",
+      fill: '#ecfccb',
+      stroke: 'rgba(63,98,18,0.9)',
+      weight: 400,
+      letterSpacingFactor: 0.018,
+      uppercase: true,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#bef264' },
+        { offset: '100%', color: '#22d3ee' },
+      ],
+      shadow: { dy: 0, stdDeviation: 8, color: '#84cc16', opacity: 0.3 },
+    },
+    {
+      id: 'paper-scratch',
+      fontFamily: "'Paper Scratch','Dokdo','Impact',sans-serif",
+      fill: '#fef2f2',
+      stroke: 'rgba(127,29,29,0.92)',
+      weight: 400,
+      letterSpacingFactor: 0.012,
+      uppercase: false,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#fca5a5' },
+        { offset: '100%', color: '#f97316' },
+      ],
+      shadow: { dy: 1, stdDeviation: 5, color: '#7f1d1d', opacity: 0.34 },
+    },
+    {
+      id: 'sludgeborn',
+      fontFamily: "'Sludgeborn','Paper Scratch','Impact',sans-serif",
+      fill: '#f5f3ff',
+      stroke: 'rgba(88,28,135,0.94)',
+      weight: 400,
+      letterSpacingFactor: 0.014,
+      uppercase: true,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#c4b5fd' },
+        { offset: '100%', color: '#f472b6' },
+      ],
+      shadow: { dy: 0, stdDeviation: 7, color: '#a855f7', opacity: 0.36 },
+    },
+    {
+      id: 'playgum',
+      fontFamily: "'Playgum','Somelist','Impact',sans-serif",
+      fill: '#ecfeff',
+      stroke: 'rgba(8,145,178,0.88)',
+      weight: 400,
+      letterSpacingFactor: 0.01,
+      uppercase: false,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#67e8f9' },
+        { offset: '100%', color: '#a78bfa' },
+      ],
+      shadow: { dy: 0, stdDeviation: 6, color: '#22d3ee', opacity: 0.26 },
+    },
+    {
+      id: 'atlasmemo',
+      fontFamily: "'Atlas Memo','Paper Scratch','Impact',sans-serif",
+      fill: '#fdf2f8',
+      stroke: 'rgba(157,23,77,0.88)',
+      weight: 400,
+      letterSpacingFactor: 0.008,
+      uppercase: false,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#f9a8d4' },
+        { offset: '100%', color: '#67e8f9' },
+      ],
+      shadow: { dy: 0, stdDeviation: 6, color: '#ec4899', opacity: 0.24 },
+    },
+    {
+      id: 'dracutaz',
+      fontFamily: "'Dracutaz','Sludgeborn','Impact',sans-serif",
+      fill: '#f5f3ff',
+      stroke: 'rgba(76,29,149,0.94)',
+      weight: 400,
+      letterSpacingFactor: 0.014,
+      uppercase: true,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#c4b5fd' },
+        { offset: '100%', color: '#f472b6' },
+      ],
+      shadow: { dy: 0, stdDeviation: 7, color: '#a855f7', opacity: 0.36 },
+    },
+    {
+      id: 'banana-chips',
+      fontFamily: "'Banana Chips','Honk','Impact',sans-serif",
+      fill: '#fffbeb',
+      stroke: 'rgba(133,77,14,0.9)',
+      weight: 400,
+      letterSpacingFactor: 0.014,
+      uppercase: true,
+      skewX: -2,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#fde68a' },
+        { offset: '100%', color: '#fb7185' },
+      ],
+      shadow: { dy: 1, stdDeviation: 7, color: '#f59e0b', opacity: 0.34 },
+    },
+    {
+      id: 'holy-star',
+      fontFamily: "'Holy Star','Playgum','Impact',sans-serif",
+      fill: '#f8fafc',
+      stroke: 'rgba(8,47,73,0.9)',
+      weight: 400,
+      letterSpacingFactor: 0.022,
+      uppercase: true,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#67e8f9' },
+        { offset: '100%', color: '#c084fc' },
+      ],
+      shadow: { dy: 0, stdDeviation: 8, color: '#38bdf8', opacity: 0.32 },
+    },
+    {
+      id: 'rocks-serif',
+      fontFamily: "'Rocks Serif','Dracutaz','Impact',sans-serif",
+      fill: '#faf5ff',
+      stroke: 'rgba(88,28,135,0.92)',
+      weight: 400,
+      letterSpacingFactor: 0.012,
+      uppercase: true,
+      fillMode: 'gradient',
+      gradientStops: [
+        { offset: '0%', color: '#d8b4fe' },
+        { offset: '100%', color: '#f472b6' },
+      ],
+      shadow: { dy: 1, stdDeviation: 6, color: '#a855f7', opacity: 0.3 },
+    },
+  ];
+
+const buildGeneratedLogoVariantDataUrl = async (
+  title: string,
+  logoFontVariant: LogoFontVariant,
+  primaryColor: string,
+  secondaryColor: string,
+  outlineColor: string
+) => {
+  const cacheKey = getGeneratedLogoVariantCacheKey(
+    title,
+    logoFontVariant,
+    primaryColor,
+    secondaryColor,
+    outlineColor
+  );
+  const cached = getCachedGeneratedLogoVariant(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const persisted = await readGeneratedLogoVariantFromStorage(cacheKey);
+  if (persisted) {
+    setCachedGeneratedLogoVariant(cacheKey, persisted);
+    return persisted;
+  }
+
+  return withDedupe(generatedLogoVariantInFlight, cacheKey, async () => {
+    const dedupedCached = getCachedGeneratedLogoVariant(cacheKey);
+    if (dedupedCached) {
+      return dedupedCached;
+    }
+
+    const dedupedPersisted = await readGeneratedLogoVariantFromStorage(cacheKey);
+    if (dedupedPersisted) {
+      setCachedGeneratedLogoVariant(cacheKey, dedupedPersisted);
+      return dedupedPersisted;
+    }
+
+    const hexToRgb = (hex: string) => {
+      const normalized = normalizeHexColor(hex, '#ffffff').slice(1);
+      return {
+        r: parseInt(normalized.slice(0, 2), 16),
+        g: parseInt(normalized.slice(2, 4), 16),
+        b: parseInt(normalized.slice(4, 6), 16),
+      };
+    };
+    const mixHexColors = (a: string, b: string, weight = 0.5) => {
+      const clampedWeight = Math.max(0, Math.min(1, weight));
+      const colorA = hexToRgb(a);
+      const colorB = hexToRgb(b);
+      const toHex = (value: number) => Math.round(value).toString(16).padStart(2, '0');
+      return `#${toHex(colorA.r * (1 - clampedWeight) + colorB.r * clampedWeight)}${toHex(colorA.g * (1 - clampedWeight) + colorB.g * clampedWeight)}${toHex(colorA.b * (1 - clampedWeight) + colorB.b * clampedWeight)}`;
+    };
+    const toRgba = (hex: string, alpha: number) => {
+      const { r, g, b } = hexToRgb(hex);
+      return `rgba(${r},${g},${b},${alpha})`;
+    };
+
+    const lines = splitTitleForGeneratedLogo(title);
+    const maxLineLength = Math.max(...lines.map((line) => line.length), 1);
+    const width = Math.max(760, Math.round(maxLineLength * 68 + 280));
+    const height = LOGO_BASE_HEIGHT;
+    const aspectRatio = width / height;
+    const availableLineWidth = Math.max(420, width - 150);
+    const baseFontSize = lines.length === 1 ? 172 : lines.length === 2 ? 136 : lines.length === 3 ? 108 : 86;
+    const compressedFontSize = Math.max(58, Math.floor((width - 160) / Math.max(maxLineLength, 1) * 1.72));
+    const preliminaryFontSize = Math.min(baseFontSize, compressedFontSize);
+    const variant =
+      GENERATED_LOGO_FONT_VARIANTS.find((item) => item.id === logoFontVariant) ||
+      GENERATED_LOGO_FONT_VARIANTS.find((item) => item.id === DEFAULT_LOGO_FONT_VARIANT) ||
+      GENERATED_LOGO_FONT_VARIANTS[0];
+    const resolvedPrimaryColor = normalizeHexColor(primaryColor, DEFAULT_LOGO_CUSTOM_PRIMARY);
+    const resolvedSecondaryColor = normalizeHexColor(secondaryColor, DEFAULT_LOGO_CUSTOM_SECONDARY);
+    const resolvedOutlineColor = normalizeHexColor(outlineColor, DEFAULT_LOGO_CUSTOM_OUTLINE);
+    const resolvedShadowColor =
+      variant.fillMode === 'outline'
+        ? resolvedSecondaryColor
+        : mixHexColors(resolvedPrimaryColor, resolvedSecondaryColor, 0.45);
+    const longestEstimatedLineWidth = Math.max(
+      ...lines.map((line) => estimateGeneratedLogoLineWidth(line, preliminaryFontSize)),
+      1
+    );
+    const widthFitScale = Math.min(1, availableLineWidth / longestEstimatedLineWidth);
+    const fontSize = Math.max(54, Math.floor(preliminaryFontSize * widthFitScale));
+    const lineHeight = Math.round(fontSize * 0.96);
+    const topPadding = Math.round(fontSize * (variant.topPaddingFactor ?? 0.08));
+    const bottomPadding = Math.round(fontSize * (variant.bottomPaddingFactor ?? 0.08));
+    const contentHeight = Math.max(1, height - topPadding - bottomPadding);
+    const totalTextHeight = lineHeight * Math.max(0, lines.length - 1);
+    const startY = Math.round(topPadding + contentHeight / 2 - totalTextHeight / 2 + fontSize * 0.34);
+    const strokeWidth =
+      variant.fillMode === 'outline'
+        ? Math.max(5, Math.round(fontSize * 0.09))
+        : Math.max(4, Math.round(fontSize * 0.07));
+    const letterSpacing = Math.max(1, Math.round(fontSize * variant.letterSpacingFactor));
+    const displayLines = variant.uppercase ? lines.map((line) => line.toUpperCase()) : lines;
+    const baseShadow = variant.shadow || { dy: 8, stdDeviation: 10, color: '#000000', opacity: 0.3 };
+    const shadow = {
+      ...baseShadow,
+      color: resolvedShadowColor,
+    };
+    const tspans = lines
+      .map((_, index) => {
+        const line = displayLines[index] || '';
+        const y = startY + index * lineHeight;
+        const estimatedLineWidth = estimateGeneratedLogoLineWidth(line, fontSize);
+        const textLength =
+          estimatedLineWidth > availableLineWidth
+            ? ` textLength="${availableLineWidth}" lengthAdjust="spacingAndGlyphs"`
+            : '';
+        return `<tspan x="${Math.round(width / 2)}" y="${y}"${textLength}>${escapeXml(line)}</tspan>`;
+      })
+      .join('');
+    const fillId = `logo-fill-${variant.id}`;
+    const fillValue =
+      variant.fillMode === 'gradient'
+        ? `url(#${fillId})`
+        : variant.fillMode === 'outline'
+          ? 'rgba(255,255,255,0.02)'
+          : resolvedPrimaryColor;
+    const defs = [
+      `<filter id="logo-shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="${shadow.dy}" stdDeviation="${shadow.stdDeviation}" flood-color="${shadow.color}" flood-opacity="${shadow.opacity}" /></filter>`,
+    ];
+    const customGradientStops =
+      (variant.gradientStops?.length || 0) <= 2
+        ? [
+          { offset: '0%', color: resolvedPrimaryColor },
+          { offset: '100%', color: resolvedSecondaryColor },
+        ]
+        : [
+          { offset: '0%', color: resolvedPrimaryColor },
+          { offset: '50%', color: resolvedSecondaryColor },
+          { offset: '100%', color: resolvedSecondaryColor },
+        ];
+    if (variant.fillMode === 'gradient' && variant.gradientStops?.length) {
+      defs.push(
+        `<linearGradient id="${fillId}" x1="0%" y1="0%" x2="0%" y2="100%">${customGradientStops
+          .map((stop) => `<stop offset="${stop.offset}" stop-color="${stop.color}" />`)
+          .join('')}</linearGradient>`
+      );
+    }
+    const transform = variant.skewX ? ` transform="skewX(${variant.skewX})"` : '';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+<defs>
+  ${defs.join('\n  ')}
+</defs>
+<g${transform}>
+  <text x="${Math.round(width / 2)}" y="${startY}" text-anchor="middle" font-family="${variant.fontFamily}" font-size="${fontSize}" font-weight="${variant.weight}"${variant.italic ? ' font-style="italic"' : ''} letter-spacing="${letterSpacing}" fill="${fillValue}" stroke="${toRgba(resolvedOutlineColor, variant.strokeOpacity ?? 0.92)}" stroke-width="${strokeWidth}" paint-order="stroke fill" filter="url(#logo-shadow)">${tspans}</text>
+</g>
+</svg>`;
+    const generatedLogo = {
+      dataUrl: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+      aspectRatio,
+    };
+    setCachedGeneratedLogoVariant(cacheKey, generatedLogo);
+    await writeGeneratedLogoVariantToStorage(cacheKey, svg);
+    return generatedLogo;
+  });
 };
 
 const splitTitleForPosterText = (title: string) => {
@@ -4673,11 +5277,13 @@ export async function GET(
     stream: 0,
     render: 0,
   };
-  const respond = (body: string, status: number, headers?: HeadersInit) => {
+  const responseHeadersCacheControl = 'no-store, max-age=0';
+
+  const respond = (body: string | Buffer | ArrayBuffer, status: number, headers?: HeadersInit) => {
     const finalHeaders = new Headers(headers);
     const totalMs = performance.now() - requestStartedAt;
     finalHeaders.set('Server-Timing', buildServerTimingHeader(phases, totalMs));
-    return new Response(body, { status, headers: finalHeaders });
+    return new Response(body as any, { status, headers: finalHeaders });
   };
 
   const { type, id } = await params;
@@ -4689,95 +5295,204 @@ export async function GET(
   const outputFormat = pickOutputFormat(imageType, request.headers.get('accept'));
   const cleanId = id.replace('.jpg', '');
 
-  // Extract configuration from query parameters
-  const lang = request.nextUrl.searchParams.get('lang') || FALLBACK_IMAGE_LANGUAGE;
-  const globalRatings = request.nextUrl.searchParams.get('ratings');
-  const posterRatings = request.nextUrl.searchParams.get('posterRatings') ?? globalRatings;
-  const backdropRatings = request.nextUrl.searchParams.get('backdropRatings') ?? globalRatings;
+  // Extract configuration from token or query parameters
+  const token = request.nextUrl.searchParams.get('token') || request.headers.get('x-erdb-token');
+  const tokenData = token ? getTokenConfig(token) : null;
+  const tokenConfig = (tokenData?.config || {}) as any;
+  const tokenUpdatedAt = tokenData?.updatedAt || 0;
+
+  const lang = tokenConfig.lang || request.nextUrl.searchParams.get('lang') || FALLBACK_IMAGE_LANGUAGE;
+  const posterLang =
+    tokenConfig.posterLang || request.nextUrl.searchParams.get('posterLang') || null;
+  const posterAnimeLang =
+    tokenConfig.posterAnimeLang || request.nextUrl.searchParams.get('posterAnimeLang') || null;
+  const backdropLang =
+    tokenConfig.backdropLang || request.nextUrl.searchParams.get('backdropLang') || null;
+  const backdropAnimeLang =
+    tokenConfig.backdropAnimeLang || request.nextUrl.searchParams.get('backdropAnimeLang') || null;
+  const logoLang =
+    tokenConfig.logoLang || request.nextUrl.searchParams.get('logoLang') || null;
+  const logoAnimeLang =
+    tokenConfig.logoAnimeLang || request.nextUrl.searchParams.get('logoAnimeLang') || null;
+  const globalRatings = tokenConfig.ratings || request.nextUrl.searchParams.get('ratings');
+
+  const getRatings = (configKey: string, queryKey: string) => {
+    const fromConfig = tokenConfig[configKey];
+    if (Array.isArray(fromConfig)) return fromConfig.join(',');
+    if (typeof fromConfig === 'string') return fromConfig;
+    return request.nextUrl.searchParams.get(queryKey);
+  };
+
+  const posterRatings = getRatings('posterRatingPreferences', 'posterRatings') ?? globalRatings;
+  const backdropRatings = getRatings('backdropRatingPreferences', 'backdropRatings') ?? globalRatings;
   const thumbnailRatings =
-    request.nextUrl.searchParams.get('thumbnailRatings') ??
-    request.nextUrl.searchParams.get('backdropRatings') ??
+    getRatings('thumbnailRatingPreferences', 'thumbnailRatings') ??
+    getRatings('backdropRatingPreferences', 'backdropRatings') ??
     globalRatings;
-  const logoRatings = request.nextUrl.searchParams.get('logoRatings') ?? globalRatings;
+  const logoRatings = getRatings('logoRatingPreferences', 'logoRatings') ?? globalRatings;
+
   const imageTextParam =
-    request.nextUrl.searchParams.get('imageText') || request.nextUrl.searchParams.get('posterText');
-  const imageText = imageTextParam || (type === 'backdrop' ? 'clean' : 'original');
-  const posterRatingsLayout = normalizePosterRatingLayout(request.nextUrl.searchParams.get('posterRatingsLayout'));
-  const posterRatingsMaxPerSide = normalizePosterRatingsMaxPerSide(request.nextUrl.searchParams.get('posterRatingsMaxPerSide'));
-  const logoRatingsMax = normalizeLogoRatingsMax(request.nextUrl.searchParams.get('logoRatingsMax'));
-  const backdropRatingsLayout = normalizeBackdropRatingLayout(request.nextUrl.searchParams.get('backdropRatingsLayout'));
-  const thumbnailRatingsLayout = normalizeThumbnailRatingLayout(
-    request.nextUrl.searchParams.get('thumbnailRatingsLayout')
+    tokenConfig.posterImageText ||
+    request.nextUrl.searchParams.get('imageText') ||
+    request.nextUrl.searchParams.get('posterText');
+  const posterAnimeImageTextParam =
+    tokenConfig.posterAnimeImageText ||
+    request.nextUrl.searchParams.get('posterAnimeImageText');
+  const backdropAnimeImageTextParam =
+    tokenConfig.backdropAnimeImageText ||
+    request.nextUrl.searchParams.get('backdropAnimeImageText');
+  const backdropImageTextParam =
+    tokenConfig.backdropImageText ||
+    request.nextUrl.searchParams.get('backdropText') ||
+    request.nextUrl.searchParams.get('imageText');
+  
+  const imageText = type === 'backdrop' || type === 'thumbnail'
+    ? (backdropImageTextParam || 'clean')
+    : (imageTextParam || 'default');
+
+  const posterRatingsLayout = normalizePosterRatingLayout(tokenConfig.posterRatingsLayout || request.nextUrl.searchParams.get('posterRatingsLayout'));
+  const posterRatingsMaxPerSide = normalizePosterRatingsMaxPerSide(tokenConfig.posterRatingsMaxPerSide ?? request.nextUrl.searchParams.get('posterRatingsMaxPerSide'));
+  const logoRatingsMax = normalizeLogoRatingsMax(tokenConfig.logoRatingsMax ?? request.nextUrl.searchParams.get('logoRatingsMax'));
+  const logoMode = normalizeLogoMode(tokenConfig.logoMode || request.nextUrl.searchParams.get('logoMode'));
+  const logoFontVariant = normalizeLogoFontVariant(tokenConfig.logoFontVariant || request.nextUrl.searchParams.get('logoFontVariant'));
+  
+  const logoPrimary = normalizeHexColor(
+    tokenConfig.logoCustomPrimary || request.nextUrl.searchParams.get('logoPrimary'),
+    DEFAULT_LOGO_CUSTOM_PRIMARY
   );
+  const logoSecondary = normalizeHexColor(
+    tokenConfig.logoCustomSecondary || request.nextUrl.searchParams.get('logoSecondary'),
+    DEFAULT_LOGO_CUSTOM_SECONDARY
+  );
+  const logoOutline = normalizeHexColor(
+    tokenConfig.logoCustomOutline || request.nextUrl.searchParams.get('logoOutline'),
+    DEFAULT_LOGO_CUSTOM_OUTLINE
+  );
+  
+  const backdropRatingsLayout = normalizeBackdropRatingLayout(tokenConfig.backdropRatingsLayout || request.nextUrl.searchParams.get('backdropRatingsLayout'));
+  const thumbnailRatingsLayout = normalizeThumbnailRatingLayout(
+    tokenConfig.thumbnailRatingsLayout || request.nextUrl.searchParams.get('thumbnailRatingsLayout')
+  );
+  
   const posterVerticalBadgeContent = normalizeVerticalBadgeContent(
+    tokenConfig.posterVerticalBadgeContent ||
+    tokenConfig.verticalBadgeContent ||
     request.nextUrl.searchParams.get('posterVerticalBadgeContent') ||
     request.nextUrl.searchParams.get('verticalBadgeContent')
   );
   const backdropVerticalBadgeContent = normalizeVerticalBadgeContent(
+    tokenConfig.backdropVerticalBadgeContent ||
+    tokenConfig.verticalBadgeContent ||
     request.nextUrl.searchParams.get('backdropVerticalBadgeContent') ||
     request.nextUrl.searchParams.get('verticalBadgeContent')
   );
   const thumbnailVerticalBadgeContent = normalizeVerticalBadgeContent(
+    tokenConfig.thumbnailVerticalBadgeContent ||
+    tokenConfig.backdropVerticalBadgeContent ||
+    tokenConfig.verticalBadgeContent ||
     request.nextUrl.searchParams.get('thumbnailVerticalBadgeContent') ||
     request.nextUrl.searchParams.get('backdropVerticalBadgeContent') ||
     request.nextUrl.searchParams.get('verticalBadgeContent')
   );
+  
   const verticalBadgeContent =
     imageType === 'poster'
-      ? posterVerticalBadgeContent
+      ? isVerticalPosterRatingLayout(posterRatingsLayout)
+        ? posterVerticalBadgeContent
+        : 'standard'
       : imageType === 'thumbnail'
-        ? thumbnailVerticalBadgeContent
+        ? isVerticalThumbnailRatingLayout(thumbnailRatingsLayout)
+          ? thumbnailVerticalBadgeContent
+          : 'standard'
         : imageType === 'backdrop'
-          ? backdropVerticalBadgeContent
+          ? isVerticalBackdropRatingLayout(backdropRatingsLayout)
+            ? backdropVerticalBadgeContent
+            : 'standard'
           : 'standard';
-  const thumbnailSize = normalizeThumbnailSize(request.nextUrl.searchParams.get('thumbnailSize'));
-  const globalStreamBadgesSetting = normalizeStreamBadgesSetting(request.nextUrl.searchParams.get('streamBadges'));
+          
+  const thumbnailSize = normalizeThumbnailSize(tokenConfig.thumbnailSize || request.nextUrl.searchParams.get('thumbnailSize'));
+  const backdropRatingsSize = normalizeBackdropRatingsSize(
+    tokenConfig.backdropRatingsSize || request.nextUrl.searchParams.get('backdropRatingsSize')
+  );
+  
+  const globalStreamBadgesSetting = normalizeStreamBadgesSetting(tokenConfig.streamBadges || request.nextUrl.searchParams.get('streamBadges'));
   const posterStreamBadgesSetting = normalizeStreamBadgesSetting(
-    request.nextUrl.searchParams.get('posterStreamBadges') || request.nextUrl.searchParams.get('streamBadges')
+    tokenConfig.posterStreamBadges || tokenConfig.streamBadges || request.nextUrl.searchParams.get('posterStreamBadges') || request.nextUrl.searchParams.get('streamBadges')
   );
   const backdropStreamBadgesSetting = normalizeStreamBadgesSetting(
-    request.nextUrl.searchParams.get('backdropStreamBadges') || request.nextUrl.searchParams.get('streamBadges')
+    tokenConfig.backdropStreamBadges || tokenConfig.streamBadges || request.nextUrl.searchParams.get('backdropStreamBadges') || request.nextUrl.searchParams.get('streamBadges')
   );
+  
   const streamBadgesSetting =
     imageType === 'poster'
       ? posterStreamBadgesSetting
       : imageType === 'backdrop'
         ? backdropStreamBadgesSetting
         : globalStreamBadgesSetting;
+        
   const qualityBadgesSide = normalizeQualityBadgesSide(
+    tokenConfig.qualityBadgesSide ||
     request.nextUrl.searchParams.get('qualityBadgesSide') ||
     request.nextUrl.searchParams.get('qualityBadgesPosition')
   );
   const posterQualityBadgesPosition = normalizePosterQualityBadgesPosition(
-    request.nextUrl.searchParams.get('posterQualityBadgesPosition')
+    tokenConfig.posterQualityBadgesPosition || request.nextUrl.searchParams.get('posterQualityBadgesPosition')
   );
+  
   const globalQualityBadgesStyle = normalizeQualityBadgesStyle(
-    request.nextUrl.searchParams.get('qualityBadgesStyle')
+    tokenConfig.qualityBadgesStyle || request.nextUrl.searchParams.get('qualityBadgesStyle')
   );
   const posterQualityBadgesStyle = normalizeQualityBadgesStyle(
+    tokenConfig.posterQualityBadgesStyle ||
+    tokenConfig.qualityBadgesStyle ||
     request.nextUrl.searchParams.get('posterQualityBadgesStyle') ||
     request.nextUrl.searchParams.get('qualityBadgesStyle')
   );
   const backdropQualityBadgesStyle = normalizeQualityBadgesStyle(
+    tokenConfig.backdropQualityBadgesStyle ||
+    tokenConfig.qualityBadgesStyle ||
     request.nextUrl.searchParams.get('backdropQualityBadgesStyle') ||
     request.nextUrl.searchParams.get('qualityBadgesStyle')
   );
+  
   const qualityBadgesStyle =
     imageType === 'poster'
       ? posterQualityBadgesStyle
       : imageType === 'backdrop'
         ? backdropQualityBadgesStyle
         : globalQualityBadgesStyle;
-  const ratingStyleParam =
-    request.nextUrl.searchParams.get('ratingStyle') || request.nextUrl.searchParams.get('style');
-  const ratingStyle = ratingStyleParam
-    ? normalizeRatingStyle(ratingStyleParam)
-    : type === 'logo'
-      ? 'plain'
-      : DEFAULT_RATING_STYLE;
-  const mdblistKey = request.nextUrl.searchParams.get('mdblistKey') || request.nextUrl.searchParams.get('mdblist_key');
-  const tmdbKey = request.nextUrl.searchParams.get('tmdbKey') || request.nextUrl.searchParams.get('tmdb_key');
+        
+  const globalRatingStyleParam =
+    tokenConfig.ratingStyle || request.nextUrl.searchParams.get('ratingStyle') || request.nextUrl.searchParams.get('style');
+    
+  const posterRatingStyle = normalizeRatingStyle(
+    tokenConfig.posterRatingStyle || globalRatingStyleParam || request.nextUrl.searchParams.get('posterRatingStyle')
+  );
+  const backdropRatingStyle = normalizeRatingStyle(
+    tokenConfig.backdropRatingStyle || globalRatingStyleParam || request.nextUrl.searchParams.get('backdropRatingStyle')
+  );
+  const thumbnailRatingStyle = normalizeRatingStyle(
+    tokenConfig.thumbnailRatingStyle || globalRatingStyleParam || request.nextUrl.searchParams.get('thumbnailRatingStyle')
+  );
+  const logoRatingStyle = normalizeRatingStyle(
+    tokenConfig.logoRatingStyle || globalRatingStyleParam || request.nextUrl.searchParams.get('logoRatingStyle')
+  );
+  
+  const ratingStyle =
+    imageType === 'poster'
+      ? posterRatingStyle
+      : imageType === 'backdrop'
+        ? backdropRatingStyle
+        : imageType === 'thumbnail'
+          ? thumbnailRatingStyle
+          : imageType === 'logo'
+            ? logoRatingStyle
+            : normalizeRatingStyle(globalRatingStyleParam);
+            
+  const mdblistKey = tokenConfig.mdblistKey || request.nextUrl.searchParams.get('mdblistKey') || request.nextUrl.searchParams.get('mdblist_key');
+  const tmdbKey = tokenConfig.tmdbKey || request.nextUrl.searchParams.get('tmdbKey') || request.nextUrl.searchParams.get('tmdb_key');
   const simklClientId =
+    tokenConfig.simklClientId ||
     request.nextUrl.searchParams.get('simklClientId') ||
     request.nextUrl.searchParams.get('simkl_client_id') ||
     SIMKL_CLIENT_ID;
@@ -4848,15 +5563,52 @@ export async function GET(
     episode = parts.length > 2 ? parts[2] : null;
   }
 
-  const requestedImageLang = normalizeTmdbLanguageCode(lang) || FALLBACK_IMAGE_LANGUAGE;
-  const includeImageLanguage = buildIncludeImageLanguage(requestedImageLang, FALLBACK_IMAGE_LANGUAGE);
+  const activeImageLang =
+    imageType === 'poster'
+      ? String(posterLang || '').trim().toLowerCase() === 'original'
+        ? lang
+        : posterLang || lang
+      : imageType === 'backdrop'
+        ? String(backdropLang || '').trim().toLowerCase() === 'original'
+          ? lang
+          : backdropLang || lang
+        : imageType === 'logo'
+          ? String(logoLang || '').trim().toLowerCase() === 'original'
+            ? lang
+            : logoLang || lang
+          : lang;
+  const requestedImageLang = normalizeTmdbLanguageCode(activeImageLang) || FALLBACK_IMAGE_LANGUAGE;
+  const includeImageLanguage = buildIncludeImageLanguage(
+    requestedImageLang,
+    FALLBACK_IMAGE_LANGUAGE
+  );
   const aiometadataEpisodeProvider = normalizeAiometadataEpisodeProvider(
     request.nextUrl.searchParams.get('aiometadataProvider')
   );
+  const normalizedPosterImageText =
+    imageText === 'original' ? 'default' : imageText;
+  const normalizedPosterAnimeImageText =
+    posterAnimeImageTextParam === 'original' ? 'default' : posterAnimeImageTextParam;
   const posterTextPreference: PosterTextPreference =
-    imageText === 'clean' || imageText === 'alternative' || imageText === 'original'
-      ? (imageText as PosterTextPreference)
-      : 'original';
+    normalizedPosterImageText === 'clean' ||
+    normalizedPosterImageText === 'alternative' ||
+    normalizedPosterImageText === 'default'
+      ? normalizedPosterImageText
+      : 'default';
+  const posterAnimeTextPreference: PosterTextPreference =
+    normalizedPosterAnimeImageText === 'clean' ||
+    normalizedPosterAnimeImageText === 'alternative' ||
+    normalizedPosterAnimeImageText === 'default'
+      ? normalizedPosterAnimeImageText
+      : 'clean';
+  const normalizedBackdropAnimeImageText =
+    backdropAnimeImageTextParam === 'original' ? 'default' : backdropAnimeImageTextParam;
+  const backdropAnimeTextPreference: PosterTextPreference =
+    normalizedBackdropAnimeImageText === 'clean' ||
+    normalizedBackdropAnimeImageText === 'alternative' ||
+    normalizedBackdropAnimeImageText === 'default'
+      ? normalizedBackdropAnimeImageText
+      : 'clean';
   const ratingsForType =
     imageType === 'poster'
       ? posterRatings
@@ -4894,8 +5646,7 @@ export async function GET(
   const streamBadgesCacheKeySeed = shouldApplyStreamBadges
     ? `streambadges:${streamBadgesSeedWindow ?? 0}`
     : 'off';
-  const shouldCacheFinalImage =
-    shouldApplyRatings || shouldApplyStreamBadges || (imageType === 'poster' && posterTextPreference === 'clean');
+  const shouldCacheFinalImage = isObjectStorageConfigured();
   const effectiveRatingPreferences = shouldApplyRatings ? Array.from(new Set<RatingPreference>(ratingPreferences)) : [];
   const selectedRatings = new Set<RatingPreference>(effectiveRatingPreferences);
   const mdblistCacheSeed = buildMdbListCacheSeed(mdblistKey);
@@ -4906,24 +5657,41 @@ export async function GET(
     outputFormat,
     cleanId,
     requestedImageLang,
-    posterTextPreference,
+    imageType === 'poster'
+      ? `${posterTextPreference}:${posterAnimeTextPreference}`
+      : imageType === 'backdrop'
+        ? `${posterTextPreference}:${backdropAnimeTextPreference}`
+        : posterTextPreference,
     imageType === 'poster' ? posterRatingsLayout : '-',
     imageType === 'poster' ? String(posterRatingsMaxPerSide ?? 'auto') : '-',
+    imageType === 'poster' ? String(posterLang || '-') : '-',
+    imageType === 'poster' ? String(posterAnimeLang || '-') : '-',
+    imageType === 'backdrop' ? String(backdropLang || '-') : '-',
+    imageType === 'backdrop' ? String(backdropAnimeLang || '-') : '-',
+    imageType === 'logo' ? String(logoLang || '-') : '-',
+    imageType === 'logo' ? String(logoAnimeLang || '-') : '-',
+    imageType === 'poster' ? String(posterAnimeImageTextParam || '-') : '-',
+    imageType === 'backdrop' ? String(backdropAnimeImageTextParam || '-') : '-',
     imageType === 'logo' ? String(logoRatingsMax ?? 'auto') : '-',
+    imageType === 'logo' ? logoMode : DEFAULT_LOGO_MODE,
+    imageType === 'logo' ? logoFontVariant : DEFAULT_LOGO_FONT_VARIANT,
+    imageType === 'logo' ? logoPrimary : DEFAULT_LOGO_CUSTOM_PRIMARY,
+    imageType === 'logo' ? logoSecondary : DEFAULT_LOGO_CUSTOM_SECONDARY,
+    imageType === 'logo' ? logoOutline : DEFAULT_LOGO_CUSTOM_OUTLINE,
     imageType === 'poster' ? qualityBadgesSide : '-',
     imageType === 'poster' && (posterRatingsLayout === 'top' || posterRatingsLayout === 'bottom')
       ? posterQualityBadgesPosition
       : '-',
     imageType !== 'logo' ? qualityBadgesStyle : '-',
     imageType === 'backdrop' ? backdropRatingsLayout : imageType === 'thumbnail' ? thumbnailRatingsLayout : '-',
+    imageType === 'backdrop' ? backdropRatingsSize : '-',
     imageType === 'thumbnail' ? thumbnailSize : '-',
     imageType === 'thumbnail' ? aiometadataEpisodeProvider || '-' : '-',
     ratingStyle,
     effectiveRatingPreferences.join(',') || 'none',
     mdblistCacheSeed,
     simklCacheSeed,
-    streamBadgesCacheKeySeed,
-    'v1', // Static version since we no longer have tokenConfigVersion
+    tokenUpdatedAt.toString(),
   ].join('|');
   const objectStorageEnabled = isObjectStorageConfigured();
 
@@ -5127,7 +5895,7 @@ export async function GET(
         }
 
         if (!tmdbId) {
-          const kitsuFallbackAsset = await fetchKitsuFallbackAsset(mediaId, imageType, phases);
+          const kitsuFallbackAsset = await fetchKitsuFallbackAsset(mediaId, imageType, logoMode, logoFontVariant, logoPrimary, logoSecondary, logoOutline, phases);
           rawFallbackImageUrl = kitsuFallbackAsset?.imageUrl || null;
           rawFallbackKitsuRating = kitsuFallbackAsset?.rating || null;
           rawFallbackTitle = kitsuFallbackAsset?.title || null;
@@ -5157,7 +5925,7 @@ export async function GET(
           }
 
           if (!media || !mediaType) {
-            const kitsuFallbackAsset = await fetchKitsuFallbackAsset(mediaId, imageType, phases);
+            const kitsuFallbackAsset = await fetchKitsuFallbackAsset(mediaId, imageType, logoMode, logoFontVariant, logoPrimary, logoSecondary, logoOutline, phases);
             rawFallbackImageUrl = kitsuFallbackAsset?.imageUrl || null;
             rawFallbackKitsuRating = kitsuFallbackAsset?.rating || null;
             rawFallbackTitle = kitsuFallbackAsset?.title || null;
@@ -5193,7 +5961,7 @@ export async function GET(
             throw new HttpError('TMDB ID not found for anime mapping ID', 404);
           }
 
-          const kitsuFallbackAsset = await fetchKitsuFallbackAsset(kitsuId, imageType, phases);
+          const kitsuFallbackAsset = await fetchKitsuFallbackAsset(kitsuId, imageType, logoMode, logoFontVariant, logoPrimary, logoSecondary, logoOutline, phases);
           rawFallbackImageUrl = kitsuFallbackAsset?.imageUrl || null;
           rawFallbackKitsuRating = kitsuFallbackAsset?.rating || null;
           rawFallbackTitle = kitsuFallbackAsset?.title || null;
@@ -5237,7 +6005,7 @@ export async function GET(
               phases,
             });
             if (kitsuId) {
-              const kitsuFallbackAsset = await fetchKitsuFallbackAsset(kitsuId, imageType, phases);
+              const kitsuFallbackAsset = await fetchKitsuFallbackAsset(kitsuId, imageType, logoMode, logoFontVariant, logoPrimary, logoSecondary, logoOutline, phases);
               rawFallbackImageUrl = kitsuFallbackAsset?.imageUrl || null;
               rawFallbackKitsuRating = kitsuFallbackAsset?.rating || null;
               rawFallbackTitle = kitsuFallbackAsset?.title || null;
@@ -5298,18 +6066,38 @@ export async function GET(
           }
 
           if (!media) {
-            const findResponse = await fetchJsonCached(
-              `tmdb:find:${rawImdbSeriesId}`,
-              `https://api.themoviedb.org/3/find/${rawImdbSeriesId}?api_key=${tmdbKey}&external_source=imdb_id`,
+          const findResponse = await fetchJsonCached(
+            `tmdb:find:${rawImdbSeriesId}`,
+            `https://api.themoviedb.org/3/find/${rawImdbSeriesId}?api_key=${tmdbKey}&external_source=imdb_id`,
+            TMDB_CACHE_TTL_MS,
+            phases,
+            'tmdb'
+          );
+          const findData = findResponse.data || {};
+          const episodeResult = findData.tv_episode_results?.[0] || null;
+          const prefersTvResult =
+            imageType === 'thumbnail' ||
+            (typeof season === 'string' && season.length > 0) ||
+            (typeof episode === 'string' && episode.length > 0);
+          if (episodeResult?.show_id) {
+            mediaId = String(episodeResult.show_id);
+            season = Number.isFinite(Number(episodeResult.season_number)) ? String(episodeResult.season_number) : season;
+            episode = Number.isFinite(Number(episodeResult.episode_number)) ? String(episodeResult.episode_number) : episode;
+
+            const showResponse = await fetchJsonCached(
+              `tmdb:tv:${mediaId}`,
+              `https://api.themoviedb.org/3/tv/${mediaId}?api_key=${tmdbKey}`,
               TMDB_CACHE_TTL_MS,
               phases,
               'tmdb'
             );
-            const findData = findResponse.data || {};
-            const prefersTvResult =
-              imageType === 'thumbnail' ||
-              (typeof season === 'string' && season.length > 0) ||
-              (typeof episode === 'string' && episode.length > 0);
+            if (showResponse.ok) {
+              media = showResponse.data;
+              mediaType = 'tv';
+            }
+          }
+
+          if (!media) {
             media = prefersTvResult
               ? findData.tv_results?.[0] || findData.movie_results?.[0]
               : findData.movie_results?.[0] || findData.tv_results?.[0];
@@ -5321,6 +6109,7 @@ export async function GET(
           }
         }
       }
+      }
 
       if (!media && !useRawKitsuFallback) {
         throw new HttpError('Movie/Show not found on TMDB', 404);
@@ -5331,6 +6120,75 @@ export async function GET(
         allowAnimeOnlyRatings = hasConfirmedAnimeMapping && mediaLooksAnimated;
       }
       const isAnimeContent = hasNativeAnimeInput || hasConfirmedAnimeMapping || mediaLooksAnimated;
+      const effectivePosterTextPreference =
+        type === 'poster' && isAnimeContent ? posterAnimeTextPreference : posterTextPreference;
+      const effectiveBackdropTextPreference =
+        type === 'backdrop' && isAnimeContent ? backdropAnimeTextPreference : (imageText as PosterTextPreference);
+      const activePosterLanguageSetting =
+        imageType === 'poster'
+          ? isAnimeContent && posterAnimeLang
+            ? posterAnimeLang
+            : posterLang
+          : null;
+      const activeBackdropLanguageSetting =
+        imageType === 'backdrop'
+          ? isAnimeContent && backdropAnimeLang
+            ? backdropAnimeLang
+            : backdropLang
+          : null;
+      const activeLogoLanguageSetting =
+        imageType === 'logo'
+          ? isAnimeContent && logoAnimeLang
+            ? logoAnimeLang
+            : logoLang
+          : null;
+      const isEffectiveOriginalPosterLang =
+        imageType === 'poster' && isOriginalLanguageSetting(activePosterLanguageSetting);
+      const isEffectiveOriginalBackdropLang =
+        imageType === 'backdrop' && isOriginalLanguageSetting(activeBackdropLanguageSetting);
+      const isEffectiveOriginalLogoLang =
+        imageType === 'logo' && isOriginalLanguageSetting(activeLogoLanguageSetting);
+      const effectivePosterRequestedImageLang = resolveRequestedImageLanguage({
+        configuredLanguage: activePosterLanguageSetting,
+        requestLanguage: lang,
+        fallbackLanguage: FALLBACK_IMAGE_LANGUAGE,
+      });
+      const effectiveBackdropRequestedImageLang = resolveRequestedImageLanguage({
+        configuredLanguage: activeBackdropLanguageSetting,
+        requestLanguage: lang,
+        fallbackLanguage: FALLBACK_IMAGE_LANGUAGE,
+      });
+      const effectiveLogoRequestedImageLang = resolveRequestedImageLanguage({
+        configuredLanguage: activeLogoLanguageSetting,
+        requestLanguage: lang,
+        fallbackLanguage: FALLBACK_IMAGE_LANGUAGE,
+      });
+      const effectivePosterFallbackImageLang =
+        normalizeTmdbLanguageCode(lang) || FALLBACK_IMAGE_LANGUAGE;
+      const requestedImageLanguageFallbacks = getTmdbLanguageFallbackChain(
+        requestedImageLang,
+        FALLBACK_IMAGE_LANGUAGE
+      );
+      const mediaOriginalLanguage =
+        typeof media?.original_language === 'string' && media.original_language.trim().length > 0
+          ? media.original_language.trim()
+          : null;
+      const resolvedIncludeImageLanguage = buildIncludeImageLanguage(
+        resolveOriginalAwareImageLanguage({
+          configuredLanguage:
+            imageType === 'poster'
+              ? activePosterLanguageSetting
+              : imageType === 'backdrop'
+                ? activeBackdropLanguageSetting
+                : imageType === 'logo'
+                  ? activeLogoLanguageSetting
+                  : null,
+          requestLanguage: requestedImageLang,
+          mediaOriginalLanguage,
+          fallbackLanguage: FALLBACK_IMAGE_LANGUAGE,
+        }),
+        FALLBACK_IMAGE_LANGUAGE
+      );
 
       let imgPath = '';
       let imgUrl = rawFallbackImageUrl;
@@ -5347,6 +6205,10 @@ export async function GET(
       let selectedLogoAspectRatio: number | null = null;
       let selectedPosterLogoPath: string | null = null;
       let selectedPosterIsTextless = false;
+      const shouldUsePosterOriginalLanguageForLogo =
+        imageType === 'poster' &&
+        isEffectiveOriginalPosterLang &&
+        effectivePosterTextPreference === 'clean';
       const requestedExternalRatings = new Set([...selectedRatings]);
       const needsAnimeOnlyRatings = [...requestedExternalRatings].some((provider) =>
         ANIME_ONLY_RATING_PROVIDER_SET.has(provider)
@@ -5452,16 +6314,32 @@ export async function GET(
         outputFormat,
         cleanId,
         requestedImageLang,
-        posterTextPreference,
+        imageType === 'poster'
+          ? `${posterTextPreference}:${posterAnimeTextPreference}`
+          : posterTextPreference,
         imageType === 'poster' ? posterRatingsLayout : '-',
         imageType === 'poster' ? String(posterRatingsMaxPerSide ?? 'auto') : '-',
+        imageType === 'poster' ? String(posterLang || '-') : '-',
+        imageType === 'poster' ? String(posterAnimeLang || '-') : '-',
+        imageType === 'backdrop' ? String(backdropLang || '-') : '-',
+        imageType === 'backdrop' ? String(backdropAnimeLang || '-') : '-',
+        imageType === 'logo' ? String(logoLang || '-') : '-',
+        imageType === 'logo' ? String(logoAnimeLang || '-') : '-',
+        imageType === 'poster' ? String(posterAnimeImageTextParam || '-') : '-',
+        imageType === 'backdrop' ? String(backdropAnimeImageTextParam || '-') : '-',
         imageType === 'logo' ? String(logoRatingsMax ?? 'auto') : '-',
+        imageType === 'logo' ? logoMode : DEFAULT_LOGO_MODE,
+        imageType === 'logo' ? logoFontVariant : DEFAULT_LOGO_FONT_VARIANT,
+        imageType === 'logo' ? logoPrimary : DEFAULT_LOGO_CUSTOM_PRIMARY,
+        imageType === 'logo' ? logoSecondary : DEFAULT_LOGO_CUSTOM_SECONDARY,
+        imageType === 'logo' ? logoOutline : DEFAULT_LOGO_CUSTOM_OUTLINE,
         imageType === 'poster' ? qualityBadgesSide : '-',
         imageType === 'poster' && (posterRatingsLayout === 'top' || posterRatingsLayout === 'bottom')
           ? posterQualityBadgesPosition
           : '-',
         imageType !== 'logo' ? qualityBadgesStyle : '-',
         imageType === 'backdrop' ? backdropRatingsLayout : imageType === 'thumbnail' ? thumbnailRatingsLayout : '-',
+        imageType === 'backdrop' ? backdropRatingsSize : '-',
         imageType === 'thumbnail' ? thumbnailSize : '-',
         imageType === 'thumbnail' ? aiometadataEpisodeProvider || '-' : '-',
         verticalBadgeContent,
@@ -5474,6 +6352,7 @@ export async function GET(
       ].join('|');
       const finalCacheHash = sha1Hex(finalImageCacheKey);
       const finalObjectStorageKey = buildObjectStorageImageKey(
+        imageType,
         finalCacheHash,
         outputFormatToExtension(outputFormat)
       );
@@ -5484,36 +6363,46 @@ export async function GET(
           return {
             body: cachedFinalImage.body,
             contentType: cachedFinalImage.contentType,
-            cacheControl: cachedFinalImage.cacheControl,
+            cacheControl: responseHeadersCacheControl,
           };
+
         }
       }
       const detailsBundlePromise = !useRawKitsuFallback
         ? (async () => {
-          const buildDetailsUrl = (language: string) =>
-            `https://api.themoviedb.org/3/${mediaType}/${media.id}?api_key=${tmdbKey}&language=${language}&append_to_response=images,external_ids&include_image_language=${encodeURIComponent(includeImageLanguage)}`;
-
-          const [detailsResponse, fallbackDetailsResponse] = await Promise.all([
-            fetchJsonCached(
-              `tmdb:${mediaType}:${media.id}:details:${requestedImageLang}:bundle:${includeImageLanguage}`,
-              buildDetailsUrl(requestedImageLang),
-              TMDB_CACHE_TTL_MS,
-              phases,
-              'tmdb'
-            ),
-            requestedImageLang !== FALLBACK_IMAGE_LANGUAGE
-              ? fetchJsonCached(
-                `tmdb:${mediaType}:${media.id}:details:${FALLBACK_IMAGE_LANGUAGE}:bundle:${includeImageLanguage}`,
-                buildDetailsUrl(FALLBACK_IMAGE_LANGUAGE),
+          const buildDetailsUrl = (language: string) => {
+            const url = new URL(`https://api.themoviedb.org/3/${mediaType}/${media.id}`);
+            url.searchParams.set('api_key', tmdbKey);
+            url.searchParams.set('language', language);
+            url.searchParams.set('append_to_response', 'images,external_ids,translations');
+            if (resolvedIncludeImageLanguage) {
+              url.searchParams.set('include_image_language', resolvedIncludeImageLanguage);
+            }
+            return url.toString();
+          };
+          const [primaryLanguage, ...fallbackLanguages] = requestedImageLanguageFallbacks;
+          const primaryResponse = await fetchJsonCached(
+            `tmdb:${mediaType}:${media.id}:details:${primaryLanguage}:bundle:${resolvedIncludeImageLanguage}`,
+            buildDetailsUrl(primaryLanguage),
+            TMDB_CACHE_TTL_MS,
+            phases,
+            'tmdb'
+          );
+          const fallbackResponses = await Promise.all(
+            fallbackLanguages.map((language) =>
+              fetchJsonCached(
+                `tmdb:${mediaType}:${media.id}:details:${language}:bundle:${resolvedIncludeImageLanguage}`,
+                buildDetailsUrl(language),
                 TMDB_CACHE_TTL_MS,
                 phases,
                 'tmdb'
               )
-              : Promise.resolve({ ok: false, status: 0, data: null } as CachedJsonResponse)
-          ]);
+            )
+          );
 
-          const details = detailsResponse.data || {};
-          const fallbackDetails = fallbackDetailsResponse?.data || {};
+          const details = primaryResponse.data || {};
+          const fallbackDetails =
+            fallbackResponses.find((response) => response.ok && response.data)?.data || {};
 
           return {
             details,
@@ -6205,8 +7094,12 @@ export async function GET(
         outputWidth = getLogoCanvasWidth(rawFallbackLogoAspectRatio);
       }
 
+      let localizedMediaDetails: any = null;
+      let fallbackMediaDetails: any = null;
       if (!useRawKitsuFallback && detailsBundlePromise) {
         const { details, fallbackDetails, bundledImages, tmdbRating: bundledRating } = await detailsBundlePromise;
+        localizedMediaDetails = details;
+        fallbackMediaDetails = fallbackDetails;
         tmdbRating = bundledRating;
         if (episodeDetailsPromise) {
           const episodeDetails = await episodeDetailsPromise;
@@ -6225,29 +7118,63 @@ export async function GET(
           let posterCollection = input.posters || [];
           const backdropCollection = input.backdrops || [];
           const logoCollection = input.logos || [];
-          const preferredPosterPath = details?.poster_path || media?.poster_path || null;
+          const mediaOriginalLanguage =
+            typeof media?.original_language === 'string' && media.original_language.trim().length > 0
+              ? media.original_language.trim()
+              : null;
+          const resolvedPosterRequestedImageLang =
+            isEffectiveOriginalPosterLang && mediaOriginalLanguage
+              ? normalizeTmdbLanguageCode(mediaOriginalLanguage) || effectivePosterRequestedImageLang
+              : effectivePosterRequestedImageLang;
+          const preferredPosterPath = isEffectiveOriginalPosterLang
+            ? null
+            : media?.poster_path || details?.poster_path || null;
+          const preferredLogoLanguage =
+            shouldUsePosterOriginalLanguageForLogo && mediaOriginalLanguage
+              ? mediaOriginalLanguage
+              : imageType === 'poster'
+                ? resolvedPosterRequestedImageLang
+                : imageType === 'logo' && isEffectiveOriginalLogoLang && mediaOriginalLanguage
+                  ? mediaOriginalLanguage
+                  : imageType === 'logo'
+                    ? effectiveLogoRequestedImageLang
+                : requestedImageLang;
           const preferredBackdropPath = details?.backdrop_path || media?.backdrop_path || null;
           const selectedLogo = pickByLanguageWithFallback(
             logoCollection,
-            requestedImageLang,
+            preferredLogoLanguage,
             FALLBACK_IMAGE_LANGUAGE
           );
           const logoPath = selectedLogo?.file_path || null;
+          const logoLanguageMatch =
+            imageType === 'poster'
+              ? matchesImageLanguage(selectedLogo, preferredLogoLanguage)
+              : false;
 
-          const localizedPosterPath =
-            pickByLanguageWithFallback(
-              posterCollection,
-              requestedImageLang,
-              FALLBACK_IMAGE_LANGUAGE,
-              preferredPosterPath
-            )?.file_path || preferredPosterPath;
+          const localizedPosterPath = isEffectiveOriginalPosterLang
+            ? null
+            : (
+                pickByLanguageWithFallback(
+                  posterCollection,
+                  resolvedPosterRequestedImageLang,
+                  effectivePosterFallbackImageLang
+                )?.file_path || preferredPosterPath
+              );
           let originalPosterPath =
+            (isEffectiveOriginalPosterLang
+              ? pickByLanguageWithFallback(
+                  posterCollection,
+                  mediaOriginalLanguage,
+                  ''
+                )?.file_path ||
+                posterCollection.find((poster: any) => !poster?.iso_639_1)?.file_path
+              : media?.poster_path) ||
             localizedPosterPath ||
             posterCollection[0]?.file_path;
           const localizedBackdropPath =
             pickByLanguageWithFallback(
               backdropCollection,
-              requestedImageLang,
+              effectiveBackdropRequestedImageLang,
               FALLBACK_IMAGE_LANGUAGE,
               preferredBackdropPath
             )?.file_path || preferredBackdropPath;
@@ -6266,8 +7193,8 @@ export async function GET(
 
             const [seasonDetailsResponse, seasonImagesResponse] = await Promise.all([
               fetchJsonCached(
-                `tmdb:season_details:${media.id}:${season}:${requestedImageLang}`,
-                `https://api.themoviedb.org/3/tv/${media.id}/season/${season}?api_key=${tmdbKey}&language=${requestedImageLang}`,
+                `tmdb:season_details:${media.id}:${season}:${resolvedPosterRequestedImageLang}`,
+                `https://api.themoviedb.org/3/tv/${media.id}/season/${season}?api_key=${tmdbKey}&language=${resolvedPosterRequestedImageLang}`,
                 TMDB_CACHE_TTL_MS,
                 phases,
                 'tmdb'
@@ -6289,7 +7216,7 @@ export async function GET(
               }
             }
 
-            if (!seasonPosterPath && requestedImageLang !== FALLBACK_IMAGE_LANGUAGE) {
+            if (!seasonPosterPath && resolvedPosterRequestedImageLang !== FALLBACK_IMAGE_LANGUAGE) {
               const seasonFallbackDetailsResponse = await fetchJsonCached(
                 `tmdb:season_details:${media.id}:${season}:${FALLBACK_IMAGE_LANGUAGE}`,
                 `https://api.themoviedb.org/3/tv/${media.id}/season/${season}?api_key=${tmdbKey}&language=${FALLBACK_IMAGE_LANGUAGE}`,
@@ -6313,22 +7240,27 @@ export async function GET(
             }
 
             originalPosterPath =
-              seasonPosterPath ||
-              pickByLanguageWithFallback(
-                posterCollection,
-                requestedImageLang,
-                FALLBACK_IMAGE_LANGUAGE,
-                seasonPosterPath
-              )?.file_path ||
+              (isEffectiveOriginalPosterLang
+                ? pickByLanguageWithFallback(
+                    posterCollection,
+                    mediaOriginalLanguage,
+                    ''
+                  )?.file_path || seasonPosterPath
+                : seasonPosterPath ||
+                  pickByLanguageWithFallback(
+                    posterCollection,
+                    resolvedPosterRequestedImageLang,
+                    effectivePosterFallbackImageLang
+                  )?.file_path) ||
               originalPosterPath;
           }
 
           if (type === 'poster') {
             const selectedPoster = pickPosterByPreference(
               posterCollection,
-              posterTextPreference,
-              requestedImageLang,
-              FALLBACK_IMAGE_LANGUAGE,
+              effectivePosterTextPreference,
+              resolvedPosterRequestedImageLang,
+              effectivePosterFallbackImageLang,
               originalPosterPath
             );
             const selectedPosterIsTextless = isTextlessPosterSelection(posterCollection, selectedPoster);
@@ -6336,6 +7268,7 @@ export async function GET(
               imgPath: selectedPoster?.file_path || '',
               logoAspectRatio: null,
               logoPath,
+              logoLanguageMatch,
               posterIsTextless: selectedPosterIsTextless,
             };
           }
@@ -6343,8 +7276,8 @@ export async function GET(
           if (type === 'backdrop') {
             const selectedBackdrop = pickBackdropByPreference(
               backdropCollection,
-              imageText as PosterTextPreference,
-              requestedImageLang,
+              effectiveBackdropTextPreference,
+              effectiveBackdropRequestedImageLang,
               FALLBACK_IMAGE_LANGUAGE,
               originalBackdropPath
             );
@@ -6353,6 +7286,7 @@ export async function GET(
               imgPath: selectedBackdrop?.file_path || '',
               logoAspectRatio: null,
               logoPath,
+              logoLanguageMatch,
               posterIsTextless: false,
             };
           }
@@ -6381,14 +7315,15 @@ export async function GET(
                 imgPath: stillPath,
                 logoAspectRatio: null,
                 logoPath,
+                logoLanguageMatch,
                 posterIsTextless: false,
               };
             }
 
             const selectedBackdrop = pickBackdropByPreference(
               backdropCollection,
-              imageText as PosterTextPreference,
-              requestedImageLang,
+              effectiveBackdropTextPreference,
+              effectiveBackdropRequestedImageLang,
               FALLBACK_IMAGE_LANGUAGE,
               originalBackdropPath
             );
@@ -6396,6 +7331,7 @@ export async function GET(
               imgPath: selectedBackdrop?.file_path || '',
               logoAspectRatio: null,
               logoPath,
+              logoLanguageMatch,
               posterIsTextless: false,
             };
           }
@@ -6404,7 +7340,13 @@ export async function GET(
             typeof selectedLogo?.aspect_ratio === 'number' && selectedLogo.aspect_ratio > 0
               ? selectedLogo.aspect_ratio
               : null;
-          return { imgPath: logoPath || '', logoAspectRatio, logoPath, posterIsTextless: false };
+          return {
+            imgPath: logoPath || '',
+            logoAspectRatio,
+            logoPath,
+            logoLanguageMatch,
+            posterIsTextless: false,
+          };
         };
 
         const initialImages = bundledImages || {};
@@ -6412,7 +7354,7 @@ export async function GET(
           posters: initialImages.posters || [],
           backdrops: initialImages.backdrops || [],
           logos: initialImages.logos || [],
-          seasonIncludeImageLanguage: includeImageLanguage
+          seasonIncludeImageLanguage: includeImageLanguage || undefined
         });
 
         imgPath = initialSelection.imgPath;
@@ -6422,24 +7364,38 @@ export async function GET(
         selectedLogoAspectRatio = initialSelection.logoAspectRatio;
         selectedPosterLogoPath = initialSelection.logoPath || null;
         selectedPosterIsTextless = initialSelection.posterIsTextless;
+        const selectedPosterLogoLanguageMatch = Boolean(initialSelection.logoLanguageMatch);
         if (
           imageType === 'poster' &&
-          posterTextPreference === 'clean' &&
+          effectivePosterTextPreference === 'clean' &&
           selectedPosterIsTextless &&
-          !selectedPosterLogoPath
+          (!selectedPosterLogoPath || !selectedPosterLogoLanguageMatch)
         ) {
+          const logoFallbackImagesUrl = new URL(`https://api.themoviedb.org/3/${mediaType}/${media.id}/images`);
+          logoFallbackImagesUrl.searchParams.set('api_key', tmdbKey);
+          logoFallbackImagesUrl.searchParams.set('include_image_language', resolvedIncludeImageLanguage);
           const logoFallbackImagesResponse = await fetchJsonCached(
-            `tmdb:${mediaType}:${media.id}:images:all`,
-            `https://api.themoviedb.org/3/${mediaType}/${media.id}/images?api_key=${tmdbKey}`,
+            `tmdb:${mediaType}:${media.id}:images:${resolvedIncludeImageLanguage || 'all'}`,
+            logoFallbackImagesUrl.toString(),
             TMDB_CACHE_TTL_MS,
             phases,
             'tmdb'
           );
           if (logoFallbackImagesResponse.ok) {
             const logoFallbackImages = logoFallbackImagesResponse.data || {};
+            const posterLogoOriginalLanguage =
+              typeof media?.original_language === 'string' && media.original_language.trim().length > 0
+                ? media.original_language.trim()
+                : null;
+            const resolvedPosterLogoLanguage =
+              isEffectiveOriginalPosterLang && posterLogoOriginalLanguage
+                ? normalizeTmdbLanguageCode(posterLogoOriginalLanguage) || effectivePosterRequestedImageLang
+                : effectivePosterRequestedImageLang;
             const logoFallback = pickByLanguageWithFallback(
               logoFallbackImages.logos || [],
-              requestedImageLang,
+              shouldUsePosterOriginalLanguageForLogo && posterLogoOriginalLanguage
+                ? posterLogoOriginalLanguage
+                : resolvedPosterLogoLanguage,
               FALLBACK_IMAGE_LANGUAGE
             );
             if (logoFallback?.file_path) {
@@ -6453,9 +7409,12 @@ export async function GET(
 
         // If the filtered languages returned nothing, retry with all languages and pick the first available.
         if (!imgPath && !imgUrl) {
+          const fallbackImagesUrl = new URL(`https://api.themoviedb.org/3/${mediaType}/${media.id}/images`);
+          fallbackImagesUrl.searchParams.set('api_key', tmdbKey);
+          fallbackImagesUrl.searchParams.set('include_image_language', resolvedIncludeImageLanguage);
           const fallbackImagesResponse = await fetchJsonCached(
-            `tmdb:${mediaType}:${media.id}:images:all`,
-            `https://api.themoviedb.org/3/${mediaType}/${media.id}/images?api_key=${tmdbKey}`,
+            `tmdb:${mediaType}:${media.id}:images:${resolvedIncludeImageLanguage || 'all'}`,
+            fallbackImagesUrl.toString(),
             TMDB_CACHE_TTL_MS,
             phases,
             'tmdb'
@@ -6481,6 +7440,33 @@ export async function GET(
         }
       }
 
+      if (imageType === 'logo') {
+        const generatedLogoTitle = pickPosterTitleFromMedia(
+          localizedMediaDetails || media,
+          mediaType,
+          rawFallbackTitle,
+          requestedImageLang,
+          FALLBACK_IMAGE_LANGUAGE,
+          fallbackMediaDetails
+        );
+        if (logoMode === 'ratings-only') {
+          imgUrl = buildTransparentLogoDataUrl();
+          outputWidth = 1100;
+          outputHeight = 1;
+        } else if (logoMode === 'custom-logo' && generatedLogoTitle) {
+          const generatedLogo = await buildGeneratedLogoVariantDataUrl(
+            generatedLogoTitle,
+            logoFontVariant,
+            logoPrimary,
+            logoSecondary,
+            logoOutline
+          );
+          imgUrl = generatedLogo.dataUrl;
+          outputHeight = LOGO_BASE_HEIGHT;
+          outputWidth = Math.max(760, Math.round(outputHeight * generatedLogo.aspectRatio));
+        }
+      }
+
       if (!imgUrl && !imgPath) {
         if (imageType === 'logo') {
           let fallbackImdbId = mappedImdbId || (media as any)?.imdb_id || null;
@@ -6500,9 +7486,20 @@ export async function GET(
         imgUrl = buildTmdbImageUrl(imageType, imgPath, outputWidth);
       }
       const shouldApplyPosterCleanOverlay =
-        imageType === 'poster' && posterTextPreference === 'clean' && selectedPosterIsTextless;
+        imageType === 'poster' && effectivePosterTextPreference === 'clean' && selectedPosterIsTextless;
       const posterTitleText = shouldApplyPosterCleanOverlay
-        ? pickPosterTitleFromMedia(media, mediaType, rawFallbackTitle)
+        ? pickPosterTitleFromMedia(
+          localizedMediaDetails || media,
+          mediaType,
+          rawFallbackTitle,
+          isEffectiveOriginalPosterLang &&
+            typeof media?.original_language === 'string' &&
+            media.original_language.trim().length > 0
+            ? normalizeTmdbLanguageCode(media.original_language.trim()) || effectivePosterRequestedImageLang
+            : effectivePosterRequestedImageLang,
+          FALLBACK_IMAGE_LANGUAGE,
+          fallbackMediaDetails
+        )
         : null;
       let posterLogoUrl =
         shouldApplyPosterCleanOverlay && selectedPosterLogoPath
@@ -6523,8 +7520,28 @@ export async function GET(
         imageType === 'thumbnail' &&
         usedThumbnailBackdropFallback &&
         Boolean(thumbnailFallbackEpisodeCode || thumbnailFallbackEpisodeText);
-      if (!shouldRenderBadges && !posterTitleText && !posterLogoUrl && !shouldRenderThumbnailFallbackOverlay) {
-        return getSourceImagePayload(imgUrl);
+      const isGeneratedLogo = imageType === 'logo' && String(imgUrl || '').startsWith('data:image/svg+xml');
+
+      if (
+        !shouldRenderBadges &&
+        !posterTitleText &&
+        !posterLogoUrl &&
+        !shouldRenderThumbnailFallbackOverlay &&
+        !isGeneratedLogo
+      ) {
+        const payload = await getSourceImagePayload(imgUrl);
+        if (shouldCacheFinalImage) {
+          try {
+            await putCachedImageToObjectStorage(finalObjectStorageKey, payload);
+          } catch {
+            // Ignore cache persistence failures
+          }
+        }
+        return {
+          body: payload.body,
+          contentType: payload.contentType,
+          cacheControl: responseHeadersCacheControl,
+        };
       }
       if (providerRatingsPromise) {
         providerRatings = await providerRatingsPromise;
@@ -6571,14 +7588,27 @@ export async function GET(
         streamBadges.length === 0 &&
         !posterTitleText &&
         !posterLogoUrl &&
-        !shouldRenderThumbnailFallbackOverlay
+        !shouldRenderThumbnailFallbackOverlay &&
+        !isGeneratedLogo
       ) {
-        return getSourceImagePayload(imgUrl);
+        const payload = await getSourceImagePayload(imgUrl);
+        if (shouldCacheFinalImage) {
+          try {
+            await putCachedImageToObjectStorage(finalObjectStorageKey, payload);
+          } catch {
+            // Ignore cache persistence failures
+          }
+        }
+        return {
+          body: payload.body,
+          contentType: payload.contentType,
+          cacheControl: responseHeadersCacheControl,
+        };
       }
       const usePosterBadgeLayout = type === 'poster';
       const useBackdropBadgeLayout = type === 'backdrop' || type === 'thumbnail';
       const useLogoBadgeLayout = type === 'logo';
-const logoBadgeScale = 1;
+      const logoBadgeScale = 1;
       const usePosterRowLayout =
         usePosterBadgeLayout &&
         (posterRatingsLayout === 'top' ||
@@ -6699,6 +7729,19 @@ const logoBadgeScale = 1;
               gap: 6,
             };
           }
+        } else if (backdropRatingsSize === 'large') {
+          badgeIconSize = 44;
+          badgeFontSize = 32;
+          badgePaddingY = 10;
+          badgePaddingX = 16;
+          badgeGap = 10;
+          backdropMinMetrics = {
+            iconSize: 25,
+            fontSize: 18,
+            paddingX: 9,
+            paddingY: 6,
+            gap: 6,
+          };
         }
       } else if (usePosterBadgeLayout) {
         if (usePosterRowLayoutLarge) {
@@ -7054,21 +8097,59 @@ const logoBadgeScale = 1;
       const qualityBadges = useLogoBadgeLayout ? [] : streamBadges;
       const badgesForIcons = cappedRatingBadges;
       const logoNaturalWidth = useLogoBadgeLayout ? outputWidth : 0;
-      const logoBadgesPerRow = useLogoBadgeLayout && cappedRatingBadges.length > 0
-        ? Math.max(1, cappedRatingBadges.length)
+      const logoBadgeContainerTargetWidth = useLogoBadgeLayout
+        ? Math.max(0, logoNaturalWidth - 24)
         : 0;
+      const logoBadgeMetrics = {
+        iconSize: badgeIconSize,
+        fontSize: badgeFontSize,
+        paddingX: badgePaddingX,
+        paddingY: badgePaddingY,
+        gap: badgeGap,
+      };
+      let logoBadgesPerRow = 0;
+      if (useLogoBadgeLayout && cappedRatingBadges.length > 0) {
+        logoBadgesPerRow = Math.max(1, cappedRatingBadges.length);
+        if (logoMode === 'ratings-only') {
+          for (let badgesPerRow = cappedRatingBadges.length; badgesPerRow >= 1; badgesPerRow -= 1) {
+            const candidateRows = chunkBy(cappedRatingBadges, badgesPerRow);
+            const widestCandidateRow = candidateRows.reduce(
+              (maxWidth, row) =>
+                Math.max(
+                  maxWidth,
+                  measureBadgeRowWidth(row, logoBadgeMetrics, false, verticalBadgeContent)
+                ),
+              0
+            );
+            logoBadgesPerRow = badgesPerRow;
+            if (widestCandidateRow <= logoBadgeContainerTargetWidth) {
+              break;
+            }
+          }
+        }
+      }
       const logoBadgeRowsData =
         useLogoBadgeLayout && cappedRatingBadges.length > 0 && logoBadgesPerRow > 0
           ? chunkBy(cappedRatingBadges, logoBadgesPerRow)
           : [];
+      const widestLogoBadgeRowWidth = logoBadgeRowsData.reduce(
+        (maxWidth, row) =>
+          Math.max(
+            maxWidth,
+            measureBadgeRowWidth(row, logoBadgeMetrics, false, verticalBadgeContent)
+          ),
+        0
+      );
       const finalOutputWidth = useLogoBadgeLayout && logoBadgeRowWidth > 0
-        ? Math.max(logoNaturalWidth, logoBadgeRowWidth + 72)
+        ? Math.max(logoNaturalWidth, widestLogoBadgeRowWidth + 24)
         : outputWidth;
       const logoImageWidth = useLogoBadgeLayout
         ? logoNaturalWidth
         : 0;
       const logoImageHeight = useLogoBadgeLayout
-        ? outputHeight
+        ? logoMode === 'ratings-only'
+          ? 0
+          : outputHeight
         : 0;
       const logoBadgeRows = logoBadgeRowsData.length;
       const logoBadgeItemHeight = estimateBadgeHeight(
@@ -7082,7 +8163,9 @@ const logoBadgeScale = 1;
       const logoBadgeContainerMaxWidth = Math.max(0, finalOutputWidth - 24);
       const logoBadgeMaxWidth = logoBadgeContainerMaxWidth;
       const logoBadgeTopGap = useLogoBadgeLayout && cappedRatingBadges.length > 0
-        ? Math.max(20, Math.round(badgeGap * 1.15))
+        ? logoMode === 'ratings-only'
+          ? 0
+          : Math.max(20, Math.round(badgeGap * 1.15))
         : 0;
       const logoBadgeBandHeight = useLogoBadgeLayout && cappedRatingBadges.length > 0
         ? logoBadgeRows * logoBadgeItemHeight + Math.max(0, logoBadgeRows - 1) * badgeGap
@@ -7100,20 +8183,17 @@ const logoBadgeScale = 1;
       const finalImageCacheTtlMs =
         renderedRatingCacheTtlCandidates.length > 0
           ? Math.min(...renderedRatingCacheTtlCandidates)
-          : TMDB_CACHE_TTL_MS;
-      const responseCacheControl =
-        imageType === 'thumbnail'
-          ? 'no-store, max-age=0'
-          : `public, s-maxage=${Math.max(60, Math.floor(finalImageCacheTtlMs / 1000))}, stale-while-revalidate=60`;
+          : 7 * 24 * 60 * 60 * 1000;
+      const storageCacheControl = buildPublicImageCacheControl(finalImageCacheTtlMs);
       const renderedPayload = await renderWithSharp(
         {
           imageType,
           outputFormat,
           imgUrl,
           outputWidth: finalOutputWidth,
-          outputHeight: useLogoBadgeLayout ? logoImageHeight : outputHeight,
+          outputHeight: useLogoBadgeLayout ? Math.max(1, logoImageHeight) : outputHeight,
           imageWidth: useLogoBadgeLayout ? logoImageWidth : undefined,
-          imageHeight: useLogoBadgeLayout ? logoImageHeight : undefined,
+          imageHeight: useLogoBadgeLayout ? Math.max(1, logoImageHeight) : undefined,
           finalOutputHeight,
           logoBadgeTopGap,
           logoBadgeBandHeight,
@@ -7142,6 +8222,7 @@ const logoBadgeScale = 1;
           posterRatingsLayout,
           posterRatingsMaxPerSide,
           backdropRatingsLayout: activeBackdropLikeLayout,
+          backdropRatingsSize,
           thumbnailRatingsLayout,
           thumbnailSize,
           verticalBadgeContent,
@@ -7152,13 +8233,18 @@ const logoBadgeScale = 1;
           rightBadges: rightRatingBadges,
           backdropColumns,
           backdropRows,
-          cacheControl: responseCacheControl,
+          cacheControl: responseHeadersCacheControl,
         },
         phases
       );
+
       if (shouldCacheFinalImage) {
         try {
-          await putCachedImageToObjectStorage(finalObjectStorageKey, renderedPayload);
+          await putCachedImageToObjectStorage(finalObjectStorageKey, {
+            body: renderedPayload.body,
+            contentType: renderedPayload.contentType,
+            cacheControl: storageCacheControl,
+          });
         } catch {
           // Ignore distributed cache persistence failures.
         }
@@ -7166,13 +8252,11 @@ const logoBadgeScale = 1;
       return renderedPayload;
     });
 
-    const totalMs = performance.now() - requestStartedAt;
-    const cacheStatus = objectStorageHit ? 'hit' : hadSharedRender ? 'shared' : 'miss';
-    return createImageHttpResponse(
-      renderedImage,
-      buildServerTimingHeader(phases, totalMs),
-      cacheStatus
-    );
+    const finalPayload = renderedImage as RenderedImagePayload;
+    return respond(finalPayload.body, 200, {
+      'Content-Type': finalPayload.contentType,
+      'Cache-Control': responseHeadersCacheControl,
+    });
   } catch (e: any) {
     if (e instanceof HttpError) {
       return respond(e.message, e.status, e.headers);

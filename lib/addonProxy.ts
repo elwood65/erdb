@@ -8,6 +8,14 @@ import {
 const ERDB_OPTIONAL_PARAMS = [
   'ratings',
   'lang',
+  'posterLang',
+  'posterAnimeLang',
+  'backdropLang',
+  'backdropAnimeLang',
+  'logoLang',
+  'logoAnimeLang',
+  'posterAnimeImageText',
+  'backdropAnimeImageText',
   'streamBadges',
   'qualityBadgesSide',
   'posterQualityBadgesPosition',
@@ -15,6 +23,7 @@ const ERDB_OPTIONAL_PARAMS = [
   'posterRatingsLayout',
   'posterRatingsMaxPerSide',
   'backdropRatingsLayout',
+  'backdropRatingsSize',
   'thumbnailRatingsLayout',
   'posterVerticalBadgeContent',
   'backdropVerticalBadgeContent',
@@ -25,7 +34,7 @@ const ERDB_OPTIONAL_PARAMS = [
 const ERDB_TYPE_OPTIONAL_PARAMS = {
   poster: ['posterStreamBadges', 'posterQualityBadgesStyle', 'posterRatings'],
   backdrop: ['backdropStreamBadges', 'backdropQualityBadgesStyle', 'backdropRatings'],
-  logo: ['logoRatings', 'logoRatingsMax'],
+  logo: ['logoRatings', 'logoRatingsMax', 'logoMode', 'logoFontVariant', 'logoPrimary', 'logoSecondary', 'logoOutline'],
   thumbnail: ['backdropStreamBadges', 'backdropQualityBadgesStyle', 'thumbnailRatings'],
 } as const;
 const ERDB_OPTIONAL_PARAM_KEYS = [
@@ -57,6 +66,7 @@ const ERDB_TYPE_STYLE_PARAMS = {
 
 export const ERDB_RESERVED_PARAMS = new Set<string>([
   'url',
+  'token',
   'tmdbKey',
   'mdblistKey',
   'simklClientId',
@@ -83,6 +93,7 @@ export const ERDB_RESERVED_PARAMS = new Set<string>([
 
 export type ProxyConfig = {
   url: string;
+  token?: string;
   tmdbKey: string;
   mdblistKey: string;
   simklClientId?: string;
@@ -93,7 +104,18 @@ export type ProxyConfig = {
   thumbnailRatings?: string;
   logoRatings?: string;
   logoRatingsMax?: string;
+  logoMode?: string;
+  logoFontVariant?: string;
+  logoPrimary?: string;
+  logoSecondary?: string;
+  logoOutline?: string;
   lang?: string;
+  posterLang?: string;
+  posterAnimeLang?: string;
+  backdropLang?: string;
+  backdropAnimeLang?: string;
+  logoLang?: string;
+  logoAnimeLang?: string;
   streamBadges?: string;
   posterStreamBadges?: string;
   backdropStreamBadges?: string;
@@ -108,10 +130,13 @@ export type ProxyConfig = {
   backdropRatingStyle?: string;
   logoRatingStyle?: string;
   posterImageText?: string;
+  posterAnimeImageText?: string;
   backdropImageText?: string;
+  backdropAnimeImageText?: string;
   posterRatingsLayout?: string;
   posterRatingsMaxPerSide?: string;
   backdropRatingsLayout?: string;
+  backdropRatingsSize?: string;
   thumbnailRatingsLayout?: string;
   posterVerticalBadgeContent?: string;
   backdropVerticalBadgeContent?: string;
@@ -120,6 +145,7 @@ export type ProxyConfig = {
   seriesMetadataProvider?: string;
   aiometadataProvider?: string;
   erdbBase?: string;
+  baseUrl?: string;
   posterEnabled?: boolean;
   backdropEnabled?: boolean;
   logoEnabled?: boolean;
@@ -137,8 +163,19 @@ const PROXY_OPTIONAL_STRING_KEYS = [
   'thumbnailRatings',
   'logoRatings',
   'logoRatingsMax',
+  'logoMode',
+  'logoFontVariant',
+  'logoPrimary',
+  'logoSecondary',
+  'logoOutline',
   'simklClientId',
   'lang',
+  'posterLang',
+  'posterAnimeLang',
+  'backdropLang',
+  'backdropAnimeLang',
+  'logoLang',
+  'logoAnimeLang',
   'streamBadges',
   'posterStreamBadges',
   'backdropStreamBadges',
@@ -153,10 +190,13 @@ const PROXY_OPTIONAL_STRING_KEYS = [
   'backdropRatingStyle',
   'logoRatingStyle',
   'posterImageText',
+  'posterAnimeImageText',
   'backdropImageText',
+  'backdropAnimeImageText',
   'posterRatingsLayout',
   'posterRatingsMaxPerSide',
   'backdropRatingsLayout',
+  'backdropRatingsSize',
   'thumbnailRatingsLayout',
   'posterVerticalBadgeContent',
   'backdropVerticalBadgeContent',
@@ -165,6 +205,7 @@ const PROXY_OPTIONAL_STRING_KEYS = [
   'seriesMetadataProvider',
   'aiometadataProvider',
   'erdbBase',
+  'baseUrl',
  ] as const satisfies readonly (keyof ProxyConfig)[];
 type ProxyOptionalStringKey = (typeof PROXY_OPTIONAL_STRING_KEYS)[number];
 
@@ -335,6 +376,10 @@ export const decodeProxyConfig = (encoded: string): ProxyConfig | null => {
         config[key] = value;
       }
     }
+    // Alias baseUrl to erdbBase
+    if (!config.erdbBase && (parsed as any).baseUrl) {
+      config.erdbBase = toOptionalStringAllowEmpty((parsed as any).baseUrl);
+    }
     const catalogNames = normalizeProxyCatalogNameOverrides((parsed as ProxyConfig).catalogNames);
     if (catalogNames) {
       config.catalogNames = catalogNames;
@@ -404,12 +449,19 @@ export const buildErdbImageUrl = (options: {
   const { reqUrl, imageType, erdbId, tmdbKey, mdblistKey, simklClientId, config = null } = options;
   const baseOverride = getProxyParam(reqUrl, config, 'erdbBase');
   const base = new URL(baseOverride || reqUrl.origin);
-  base.pathname = `/${imageType}/${encodeURIComponent(erdbId)}.jpg`;
   base.search = '';
-  base.searchParams.set('tmdbKey', tmdbKey);
-  base.searchParams.set('mdblistKey', mdblistKey);
-  if (simklClientId) {
-    base.searchParams.set('simklClientId', simklClientId);
+
+  const token = config?.token;
+  if (token) {
+    base.pathname = `/${token}/${imageType}/${encodeURIComponent(erdbId)}.jpg`;
+    return base.toString();
+  } else {
+    base.pathname = `/${imageType}/${encodeURIComponent(erdbId)}.jpg`;
+    base.searchParams.set('tmdbKey', tmdbKey);
+    base.searchParams.set('mdblistKey', mdblistKey);
+    if (simklClientId) {
+      base.searchParams.set('simklClientId', simklClientId);
+    }
   }
 
   for (const key of ERDB_OPTIONAL_PARAMS) {

@@ -31,6 +31,11 @@ import {
   Check,
   Eye,
   EyeOff,
+  Lock,
+  LogOut,
+  RefreshCcw,
+  Save,
+  ShieldAlert,
 } from 'lucide-react';
 import type { RatingPreference } from '@/lib/ratingPreferences';
 import type { RatingProviderRow } from '@/lib/ratingRows';
@@ -48,6 +53,10 @@ import {
   type ThumbnailSize,
 } from '@/lib/thumbnailSize';
 import {
+  BACKDROP_RATINGS_SIZE_OPTIONS,
+  type BackdropRatingsSize,
+} from '@/lib/backdropRatingsSize';
+import {
   POSTER_RATING_LAYOUT_OPTIONS,
   isVerticalPosterRatingLayout,
   type PosterRatingLayout,
@@ -56,6 +65,20 @@ import {
   RATING_STYLE_OPTIONS,
   type RatingStyle,
 } from '@/lib/ratingStyle';
+import {
+  LOGO_MODE_OPTIONS,
+  type LogoMode,
+} from '@/lib/logoMode';
+import {
+  LOGO_FONT_VARIANT_OPTIONS,
+  type LogoFontVariant,
+} from '@/lib/logoFontVariant';
+import {
+  DEFAULT_LOGO_CUSTOM_PRIMARY,
+  DEFAULT_LOGO_CUSTOM_SECONDARY,
+  DEFAULT_LOGO_CUSTOM_OUTLINE,
+} from '@/lib/logoCustomColors';
+import { LOGO_COLOR_PRESETS } from '@/lib/logoColorPresets';
 
 type PreviewType = 'poster' | 'backdrop' | 'logo' | 'thumbnail';
 type ProxyType = PreviewType;
@@ -73,6 +96,14 @@ type HomePageViewState = {
   previewType: PreviewType;
   mediaId: string;
   lang: string;
+  posterLang: string;
+  posterAnimeLang: string;
+  backdropLang: string;
+  backdropAnimeLang: string;
+  logoLang: string;
+  logoAnimeLang: string;
+  posterAnimeImageText: 'default' | 'clean' | 'alternative';
+  backdropAnimeImageText: 'default' | 'clean' | 'alternative';
   supportedLanguages: SupportedLanguage[];
   tmdbKey: string;
   mdblistKey: string;
@@ -95,7 +126,13 @@ type HomePageViewState = {
   posterRatingsLayout: PosterRatingLayout;
   posterRatingsMaxPerSide: number | null;
   logoRatingsMax: number | null;
+  logoMode: LogoMode;
+  logoFontVariant: LogoFontVariant;
+  logoCustomPrimary: string;
+  logoCustomSecondary: string;
+  logoCustomOutline: string;
   backdropRatingsLayout: BackdropRatingLayout;
+  backdropRatingsSize: BackdropRatingsSize;
   thumbnailRatingsLayout: ThumbnailRatingLayout;
   posterVerticalBadgeContent: VerticalBadgeContent;
   backdropVerticalBadgeContent: VerticalBadgeContent;
@@ -103,11 +140,12 @@ type HomePageViewState = {
   thumbnailSize: ThumbnailSize;
   qualityBadgesSide: QualityBadgesSide;
   posterQualityBadgesPosition: PosterQualityBadgesPosition;
-  configCopied: boolean;
   proxyCopied: boolean;
   copied: boolean;
   aiometadataCopiedType: AiometadataPatternType | null;
   aiometadataEpisodeProvider: AiometadataEpisodeProvider;
+  activeToken: string | null;
+  configSaveStatus: 'idle' | 'saving' | 'saved' | 'error';
 };
 
 type HomePageViewDerived = {
@@ -118,17 +156,14 @@ type HomePageViewDerived = {
   githubPackageVersion: string | null;
   repoUrl: string | null;
   previewNotice: string | null;
-  canGenerateConfig: boolean;
   canGenerateProxy: boolean;
-  isConfigStringVisible: boolean;
   isProxyUrlVisible: boolean;
-  displayedConfigString: string;
   displayedProxyUrl: string;
   styleLabel: string;
   textLabel: string;
   providersLabel: string;
   activeRatingStyle: RatingStyle;
-  activeImageText: 'original' | 'clean' | 'alternative';
+  activeImageText: 'default' | 'clean' | 'alternative';
   ratingProviderRows: RatingProviderRow[];
   shouldShowQualityBadgesPosition: boolean;
   shouldShowQualityBadgesSide: boolean;
@@ -143,20 +178,33 @@ type HomePageViewActions = {
   handleExportConfig: (includeKeys: boolean) => void;
   handleImportFile: (event: ChangeEvent<HTMLInputElement>) => void;
   handleImportConfigString: (value: string) => void;
-  handleCopyConfig: () => void;
   handleCopyProxy: () => void;
   handleCopyPrompt: () => void;
   handleCopyAiometadataPattern: (type: AiometadataPatternType) => void;
   setPreviewType: Dispatch<SetStateAction<PreviewType>>;
   setMediaId: Dispatch<SetStateAction<string>>;
   setLang: Dispatch<SetStateAction<string>>;
+  setPosterLang: Dispatch<SetStateAction<string>>;
+  setPosterAnimeLang: Dispatch<SetStateAction<string>>;
+  setBackdropLang: Dispatch<SetStateAction<string>>;
+  setBackdropAnimeLang: Dispatch<SetStateAction<string>>;
+  setLogoLang: Dispatch<SetStateAction<string>>;
+  setLogoAnimeLang: Dispatch<SetStateAction<string>>;
+  setPosterAnimeImageText: Dispatch<SetStateAction<'default' | 'clean' | 'alternative'>>;
+  setBackdropAnimeImageText: Dispatch<SetStateAction<'default' | 'clean' | 'alternative'>>;
   setTmdbKey: Dispatch<SetStateAction<string>>;
   setMdblistKey: Dispatch<SetStateAction<string>>;
   setSimklClientId: Dispatch<SetStateAction<string>>;
   setPosterRatingsLayout: Dispatch<SetStateAction<PosterRatingLayout>>;
   setPosterRatingsMaxPerSide: Dispatch<SetStateAction<number | null>>;
   setLogoRatingsMax: Dispatch<SetStateAction<number | null>>;
+  setLogoMode: Dispatch<SetStateAction<LogoMode>>;
+  setLogoFontVariant: Dispatch<SetStateAction<LogoFontVariant>>;
+  setLogoCustomPrimary: Dispatch<SetStateAction<string>>;
+  setLogoCustomSecondary: Dispatch<SetStateAction<string>>;
+  setLogoCustomOutline: Dispatch<SetStateAction<string>>;
   setBackdropRatingsLayout: Dispatch<SetStateAction<BackdropRatingLayout>>;
+  setBackdropRatingsSize: Dispatch<SetStateAction<BackdropRatingsSize>>;
   setThumbnailRatingsLayout: Dispatch<SetStateAction<ThumbnailRatingLayout>>;
   setPosterVerticalBadgeContent: Dispatch<SetStateAction<VerticalBadgeContent>>;
   setBackdropVerticalBadgeContent: Dispatch<SetStateAction<VerticalBadgeContent>>;
@@ -168,10 +216,12 @@ type HomePageViewActions = {
   setPosterQualityBadgesPosition: Dispatch<SetStateAction<PosterQualityBadgesPosition>>;
   setQualityBadgesSide: Dispatch<SetStateAction<QualityBadgesSide>>;
   setRatingStyleForType: (value: RatingStyle) => void;
-  setImageTextForType: (value: 'original' | 'clean' | 'alternative') => void;
+  setImageTextForType: (value: 'default' | 'clean' | 'alternative') => void;
   setActiveStreamBadges: Dispatch<SetStateAction<StreamBadgesSetting>>;
   setActiveQualityBadgesStyle: Dispatch<SetStateAction<RatingStyle>>;
   toggleRatingPreference: (rating: RatingPreference) => void;
+  enableAllRatingPreferences: () => void;
+  disableAllRatingPreferences: () => void;
   reorderRatingPreference: (fromIndex: number, toIndex: number) => void;
   updateProxyManifestUrl: (value: string) => void;
   updateProxyCatalogName: (key: string, value: string) => void;
@@ -182,8 +232,9 @@ type HomePageViewActions = {
   resetProxyCatalogCustomizations: () => void;
   toggleProxyEnabledType: (type: ProxyType) => void;
   toggleProxyTranslateMeta: () => void;
-  toggleConfigStringVisibility: () => void;
   toggleProxyUrlVisibility: () => void;
+  handleTokenDisconnect: () => void;
+  handleSaveConfig: () => void;
 };
 
 export type HomePageViewProps = {
@@ -263,6 +314,14 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
     previewType,
     mediaId,
     lang,
+    posterLang,
+    posterAnimeLang,
+    backdropLang,
+    backdropAnimeLang,
+    logoLang,
+    logoAnimeLang,
+    posterAnimeImageText,
+    backdropAnimeImageText,
     supportedLanguages,
     tmdbKey,
     mdblistKey,
@@ -285,7 +344,13 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     logoRatingsMax,
+    logoMode,
+    logoFontVariant,
+    logoCustomPrimary,
+    logoCustomSecondary,
+    logoCustomOutline,
     backdropRatingsLayout,
+    backdropRatingsSize,
     thumbnailRatingsLayout,
     posterVerticalBadgeContent,
     backdropVerticalBadgeContent,
@@ -293,7 +358,6 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
     thumbnailSize,
     qualityBadgesSide,
     posterQualityBadgesPosition,
-    configCopied,
     proxyCopied,
     copied,
     aiometadataCopiedType,
@@ -303,15 +367,9 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
     baseUrl,
     previewUrl,
     proxyUrl,
-    currentVersion,
-    githubPackageVersion,
-    repoUrl,
     previewNotice,
-    canGenerateConfig,
     canGenerateProxy,
-    isConfigStringVisible,
     isProxyUrlVisible,
-    displayedConfigString,
     displayedProxyUrl,
     styleLabel,
     textLabel,
@@ -330,20 +388,33 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
     handleExportConfig,
     handleImportFile,
     handleImportConfigString,
-    handleCopyConfig,
     handleCopyProxy,
     handleCopyPrompt,
     handleCopyAiometadataPattern,
     setPreviewType,
     setMediaId,
     setLang,
+    setPosterLang,
+    setPosterAnimeLang,
+    setBackdropLang,
+    setBackdropAnimeLang,
+    setLogoLang,
+    setLogoAnimeLang,
+    setPosterAnimeImageText,
+    setBackdropAnimeImageText,
     setTmdbKey,
     setMdblistKey,
     setSimklClientId,
     setPosterRatingsLayout,
     setPosterRatingsMaxPerSide,
     setLogoRatingsMax,
+    setLogoMode,
+    setLogoFontVariant,
+    setLogoCustomPrimary,
+    setLogoCustomSecondary,
+    setLogoCustomOutline,
     setBackdropRatingsLayout,
+    setBackdropRatingsSize,
     setThumbnailRatingsLayout,
     setPosterVerticalBadgeContent,
     setBackdropVerticalBadgeContent,
@@ -359,6 +430,8 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
     setActiveStreamBadges,
     setActiveQualityBadgesStyle,
     toggleRatingPreference,
+    enableAllRatingPreferences,
+    disableAllRatingPreferences,
     reorderRatingPreference,
     updateProxyManifestUrl,
     updateProxyCatalogName,
@@ -368,11 +441,117 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
     resetProxyCatalogCustomizations,
     toggleProxyEnabledType,
     toggleProxyTranslateMeta,
-    toggleConfigStringVisibility,
     toggleProxyUrlVisibility,
+    handleTokenDisconnect,
+    handleSaveConfig,
   } = actions;
   const [isCatalogModalOpen, setIsCatalogModalOpen] = useState(false);
   const [isAiometadataModalOpen, setIsAiometadataModalOpen] = useState(false);
+  const [tokenCopied, setTokenCopied] = useState(false);
+  const [isRotateModalOpen, setIsRotateModalOpen] = useState(false);
+  const [rotatePassword, setRotatePassword] = useState('');
+  const [rotateShowPassword, setRotateShowPassword] = useState(false);
+  const [rotateStatus, setRotateStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [rotateMessage, setRotateMessage] = useState('');
+  const [rotatedNewToken, setRotatedNewToken] = useState('');
+  const [rotateCopied, setRotateCopied] = useState(false);
+
+  const handleRotateToken = async () => {
+    if (!rotatePassword) {
+      setRotateStatus('error');
+      setRotateMessage('Enter the current token password.');
+      return;
+    }
+    setRotateStatus('loading');
+    setRotateMessage('');
+    try {
+      const res = await fetch('/api/workspace-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'rotate-token', password: rotatePassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Rotation failed');
+
+      const newToken: string = data.newToken;
+      setRotatedNewToken(newToken);
+      setRotateStatus('success');
+
+      // Update localStorage
+      window.localStorage.setItem('erdb_active_token', newToken);
+    } catch (err: any) {
+      setRotateStatus('error');
+      setRotateMessage(err?.message || 'Error during token rotation');
+    }
+  };
+
+  const handleCopyRotatedToken = async () => {
+    await navigator.clipboard.writeText(rotatedNewToken);
+    setRotateCopied(true);
+    setTimeout(() => setRotateCopied(false), 2000);
+  };
+
+  const handleCloseRotateModal = async () => {
+    const wasSuccess = rotateStatus === 'success';
+    const tokenToSave = rotatedNewToken;
+    const passwordToSave = rotatePassword;
+
+    setIsRotateModalOpen(false);
+    setRotatePassword('');
+    setRotateShowPassword(false);
+    setRotateStatus('idle');
+    setRotateMessage('');
+    setRotatedNewToken('');
+    setRotateCopied(false);
+
+    if (wasSuccess && tokenToSave && passwordToSave) {
+      // Called directly within a user gesture (button click) so the browser
+      // can reliably show the "Update saved password?" prompt.
+      const passwordCredentialCtor = (window as Window & {
+        PasswordCredential?: new (data: { id: string; name?: string; password: string }) => Credential;
+      }).PasswordCredential;
+      if ('credentials' in navigator && passwordCredentialCtor) {
+        try {
+          const credential = new passwordCredentialCtor({
+            id: tokenToSave,
+            name: 'ERDB Token Account',
+            password: passwordToSave,
+          });
+          await navigator.credentials.store(credential);
+        } catch {
+          // Some browsers block credential storage silently
+        }
+      }
+
+      // Hidden form fallback: browsers that need an actual form submission
+      // to trigger their password manager (e.g. Chrome in some configurations).
+      // The form submits to a GET page so no data payload reaches the server.
+      const form = document.createElement('form');
+      form.method = 'get';
+      form.action = '/configurator';
+      form.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;opacity:0;pointer-events:none;';
+
+      const usernameInput = document.createElement('input');
+      usernameInput.type = 'text';
+      usernameInput.name = 'u';
+      usernameInput.setAttribute('autocomplete', 'username');
+      usernameInput.value = tokenToSave;
+
+      const passwordInput = document.createElement('input');
+      passwordInput.type = 'password';
+      passwordInput.name = 'p';
+      passwordInput.setAttribute('autocomplete', 'current-password');
+      passwordInput.value = passwordToSave;
+
+      form.appendChild(usernameInput);
+      form.appendChild(passwordInput);
+      document.body.appendChild(form);
+      form.submit(); // real navigation — browser sees credentials and offers to save
+      return; // navigation handles the reload
+    } else if (wasSuccess) {
+      window.location.reload();
+    }
+  };
   const shouldShowVerticalBadgeContent =
     (previewType === 'poster' && isVerticalPosterRatingLayout(posterRatingsLayout)) ||
     (previewType === 'backdrop' && backdropRatingsLayout === 'right-vertical') ||
@@ -476,7 +655,7 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
   };
 
   const handlePasteOldConfigString = () => {
-    const pastedValue = window.prompt('Paste the old ERDB config string or proxy URL');
+    const pastedValue = window.prompt('Paste an old ERDB configuration or a proxy URL');
     if (!pastedValue?.trim()) {
       return;
     }
@@ -485,6 +664,7 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
   };
 
   return (
+    <>
     <div className="relative min-h-screen bg-[#06070b] text-slate-200 selection:bg-orange-400/30 font-[var(--font-body)] xl:h-screen xl:overflow-hidden">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -top-32 left-1/2 h-[520px] w-[760px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_top,_rgba(249,115,22,0.12),_transparent_60%)] blur-3xl" />
@@ -495,38 +675,143 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1840px] flex-col px-3 py-3 sm:px-4 sm:py-4 xl:h-full xl:min-h-0">
         <nav ref={navRef} className="z-50 rounded-[28px] border border-white/10 bg-[#06070b]/72 shadow-[0_24px_70px_-45px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-2xl">
-          <div className="mx-auto grid w-full grid-cols-1 gap-3 px-4 py-3 sm:px-6 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center lg:gap-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-300 via-amber-300 to-red-500 shadow-[0_14px_30px_-14px_rgba(249,115,22,0.75)] ring-1 ring-white/20">
-                <Star className="w-5 h-5 text-white fill-white" />
-              </div>
-              <div className="leading-tight">
-                <span className="block font-[var(--font-display)] text-lg text-white tracking-tight">ERDB</span>
-                <span className="block text-[10px] uppercase tracking-[0.36em] text-orange-300/90">Signature Workspace</span>
-              </div>
+          <div className="mx-auto grid w-full grid-cols-1 gap-3 px-4 py-3 sm:px-6 lg:grid-cols-[auto_1fr_auto] lg:items-center lg:gap-4">
+            {/* Left: nav links */}
+            <div className="flex flex-wrap items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <Link href="/" className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 transition-colors hover:bg-white/[0.07] hover:text-white"><ArrowLeft className="h-3.5 w-3.5" />Home</Link>
+              <span className="rounded-full border border-orange-400/20 bg-orange-500/10 px-3 py-2 text-white">Workspace</span>
+              <Link href="/docs" className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 transition-colors hover:bg-white/[0.07] hover:text-white">API Docs</Link>
             </div>
-            <div className="flex w-full flex-col gap-2 lg:items-center">
-              <div className="flex flex-wrap items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                <Link href="/" className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 transition-colors hover:bg-white/[0.07] hover:text-white"><ArrowLeft className="h-3.5 w-3.5" />Home</Link>
-                <span className="rounded-full border border-orange-400/20 bg-orange-500/10 px-3 py-2 text-white">Workspace</span>
-                <Link href="/docs" className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 transition-colors hover:bg-white/[0.07] hover:text-white">API Docs</Link>
+            {/* Center: Type + Media ID + Lang */}
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Type</span>
+                <div className={`${SEGMENT_CLASS} flex-wrap p-0.5 xl:flex-nowrap`}>
+                  {(['poster', 'backdrop', 'logo', 'thumbnail'] as const).map(type => (
+                    <button key={type} onClick={() => setPreviewType(type)} className={`px-2 py-1 rounded text-[11px] font-bold transition-all flex items-center gap-1 whitespace-nowrap ${previewType === type ? 'border border-orange-400/20 bg-orange-500/10 text-white' : 'border border-transparent text-slate-400 hover:text-white'}`}>
+                      {type === 'poster' && <ImageIcon className="w-3 h-3" />}
+                      {type === 'backdrop' && <MonitorPlay className="w-3 h-3" />}
+                      {type === 'logo' && <Layers className="w-3 h-3" />}
+                      {type === 'thumbnail' && <MonitorPlay className="w-3 h-3" />}
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 lg:justify-center">
-              <div className={`rounded-full border px-3 py-2 text-[10px] normal-case tracking-normal shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${githubPackageVersion && githubPackageVersion !== currentVersion ? 'border-red-500/40 bg-red-500/10 text-red-200' : 'border-white/10 bg-white/[0.04] text-slate-300'}`}>
-                Current Version: v{currentVersion}
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Media ID</span>
+                <input
+                  type="text"
+                  value={mediaId}
+                  onChange={(e) => setMediaId(e.target.value)}
+                  placeholder={previewType === 'thumbnail' ? 'tt0944947:1:1' : 'tt0133093'}
+                  className={`h-8 w-40 ${INPUT_COMPACT_CLASS}`}
+                />
               </div>
-              {githubPackageVersion && (
-                <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] text-slate-300 normal-case tracking-normal shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-                  Latest Version: v{githubPackageVersion}
+              {tmdbKey ? (
+                <div className="flex items-center gap-2">
+                  <span className="flex shrink-0 items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500"><Globe2 className="w-3 h-3" /> Lang</span>
+                  <div className="relative">
+                    <select value={lang} onChange={(e) => setLang(e.target.value)} className={`h-8 w-40 appearance-none pr-7 ${INPUT_COMPACT_CLASS}`}>
+                      {supportedLanguages.map((language) => (
+                        <option key={language.code} value={language.code} className="bg-[#0a0a0a]">
+                          {language.flag} {language.label}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronRight className="absolute right-2 top-2.5 w-3 h-3 rotate-90 stroke-2 text-slate-500 pointer-events-none" />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="flex shrink-0 items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500"><Globe2 className="w-3 h-3" /> Lang</span>
+                  <div className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-[#080808] px-2 py-1.5 text-[10px] text-slate-500">
+                    <Globe2 className="w-3 h-3 shrink-0" /> Add TMDB key
+                  </div>
                 </div>
               )}
-              <a
-                href={repoUrl || 'https://github.com/realbestia1/erdb'}
-                className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] text-slate-100 transition-colors hover:bg-white/10"
-              >
-                GitHub
-              </a>
+            </div>
+            {/* Right: Rotate Token / Disconnect / Login */}
+             <div className="flex items-center gap-2">
+              {state.activeToken && (
+                <button
+                  onClick={handleSaveConfig}
+                  disabled={state.configSaveStatus === 'saving'}
+                  className={`rounded-full border px-3 py-2 text-[10px] transition-colors inline-flex items-center gap-1.5 ${
+                    state.configSaveStatus === 'saved'
+                      ? 'border-green-400/30 bg-green-500/15 text-green-200'
+                      : state.configSaveStatus === 'error'
+                        ? 'border-red-400/30 bg-red-500/15 text-red-200'
+                        : state.configSaveStatus === 'saving'
+                          ? 'border-orange-400/20 bg-orange-500/10 text-orange-200 cursor-wait'
+                          : 'border-orange-400/20 bg-orange-500/10 text-white hover:bg-orange-500/20'
+                  }`}
+                  title="Save current configuration to token"
+                >
+                  {state.configSaveStatus === 'saved' ? (
+                    <Check className="h-3 w-3" />
+                  ) : (
+                    <Save className="h-3 w-3" />
+                  )}
+                  <span>
+                    {state.configSaveStatus === 'saving'
+                      ? 'Saving…'
+                      : state.configSaveStatus === 'saved'
+                        ? 'Saved'
+                        : state.configSaveStatus === 'error'
+                          ? 'Error'
+                          : 'Save Config'}
+                  </span>
+                </button>
+              )}
+              {state.activeToken && (
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(state.activeToken!);
+                    setTokenCopied(true);
+                    setTimeout(() => setTokenCopied(false), 2000);
+                  }}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] text-slate-400 transition-colors hover:bg-white/10 hover:text-white inline-flex items-center gap-1.5"
+                  title="Copia il Token negli appunti"
+                >
+                  {tokenCopied ? (
+                    <Check className="h-3 w-3 text-green-400" />
+                  ) : (
+                    <Clipboard className="h-3 w-3" />
+                  )}
+                  <span className={tokenCopied ? "text-green-400" : ""}>
+                    {tokenCopied ? 'Copied' : 'Copy Token'}
+                  </span>
+                </button>
+              )}
+              {state.activeToken && (
+                <button
+                  onClick={() => setIsRotateModalOpen(true)}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] text-slate-400 transition-colors hover:bg-white/10 hover:text-white inline-flex items-center gap-1.5"
+                  title="Genera un nuovo token migrando la configurazione"
+                >
+                  <RefreshCcw className="h-3 w-3" />
+                  <span>Rotate Token</span>
+                </button>
+              )}
+              {state.activeToken && (
+                <button
+                  onClick={actions.handleTokenDisconnect}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] text-slate-100 transition-colors hover:bg-white/10 inline-flex items-center gap-2"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span>Disconnect</span>
+                </button>
+              )}
+              {!state.activeToken && (
+                <Link
+                  href="/configurator"
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] text-slate-100 transition-colors hover:bg-white/10 inline-flex items-center gap-2"
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  <span>Login</span>
+                </Link>
+              )}
             </div>
           </div>
         </nav>
@@ -534,111 +819,6 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
         <main className="mx-auto flex w-full flex-col pb-6 pt-3 xl:flex-1 xl:min-h-0 xl:overflow-hidden xl:pb-0">
           {/* Live Previewer */}
           <section id="preview" className="relative flex flex-col overflow-visible xl:min-h-0 xl:flex-1 xl:overflow-hidden">
-            <div
-              className={`${INNER_PANEL_CLASS} relative z-10 mb-4 p-2.5 xl:premium-scrollbar xl:overflow-x-auto xl:overflow-y-hidden`}
-              onWheel={handleHorizontalScrollWheel}
-            >
-              <div className="flex flex-col gap-3 xl:min-w-max xl:flex-row xl:items-center xl:gap-3">
-                <div className="space-y-2 xl:min-w-[420px] xl:pr-1">
-                  <div className="xl:flex xl:items-center xl:gap-2.5">
-                    <div className="min-w-[128px]">
-                      <div className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">Config Transfer</div>
-                      <p className="mt-0.5 whitespace-nowrap text-[10px] text-slate-600">Download or upload config.</p>
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] xl:mt-0">
-                      <button
-                        onClick={() => handleExportConfig(true)}
-                        className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-colors ${exportStatus === 'with' ? 'bg-green-500 text-white' : 'bg-orange-500 text-black hover:bg-orange-400'}`}
-                      >
-                        {exportStatus === 'with' ? (
-                          <>
-                            <Check className="w-3 h-3" />
-                            <span>DOWNLOADED</span>
-                          </>
-                        ) : (
-                          <span>DOWNLOAD KEYS</span>
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleExportConfig(false)}
-                        className={`px-2 py-1 rounded-md font-semibold flex items-center gap-1 transition-colors ${exportStatus === 'without' ? 'bg-green-500 text-white' : 'bg-[#121212] text-slate-200 hover:bg-[#1a1a1a]'}`}
-                      >
-                        {exportStatus === 'without' ? (
-                          <>
-                            <Check className="w-3 h-3" />
-                            <span>DOWNLOADED</span>
-                          </>
-                        ) : (
-                          <span>DOWNLOAD SAFE</span>
-                        )}
-                      </button>
-                      <label className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold bg-[#121212] text-slate-200 hover:bg-[#1a1a1a] transition-colors cursor-pointer">
-                        <span>UPLOAD FILE</span>
-                        <input
-                          type="file"
-                          accept="application/json,.json,.txt"
-                          onChange={handleImportFile}
-                          className="hidden"
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        onClick={handlePasteOldConfigString}
-                        className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-[#121212] px-2 py-1 font-semibold text-slate-200 transition-colors hover:bg-[#1a1a1a]"
-                      >
-                        <Clipboard className="h-3 w-3" />
-                        <span>PASTE OLD CONFIG STRING</span>
-                      </button>
-                    </div>
-                  </div>
-                  {Boolean(importMessage) && (
-                    <p className={`mt-1 text-[10px] ${importStatus === 'success' ? 'text-green-400' : 'text-red-400'}`}>
-                      {importMessage}
-                    </p>
-                  )}
-                </div>
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Type</span>
-                  <div className={`${SEGMENT_CLASS} min-w-0 flex-wrap p-0.5 xl:flex-nowrap`}>
-                    {(['poster', 'backdrop', 'logo', 'thumbnail'] as const).map(type => (
-                      <button key={type} onClick={() => setPreviewType(type)} className={`px-2 py-1 rounded text-[11px] font-bold transition-all flex items-center gap-1 whitespace-nowrap ${previewType === type ? 'border border-orange-400/20 bg-orange-500/10 text-white' : 'border border-transparent text-slate-400 hover:text-white'}`}>
-                        {type === 'poster' && <ImageIcon className="w-3 h-3" />}
-                        {type === 'backdrop' && <MonitorPlay className="w-3 h-3" />}
-                        {type === 'logo' && <Layers className="w-3 h-3" />}
-                        {type === 'thumbnail' && <MonitorPlay className="w-3 h-3" />}
-                        {type.charAt(0).toUpperCase() + type.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex min-w-0 items-center gap-2 xl:min-w-[260px]">
-                  <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500">Media ID</span>
-                  <input type="text" value={mediaId} onChange={(e) => setMediaId(e.target.value)} placeholder={previewType === 'thumbnail' ? 'tt0944947:1:1' : 'tt0133093'} className={`h-9 min-w-0 flex-1 ${INPUT_COMPACT_CLASS}`} />
-                </div>
-                {tmdbKey ? (
-                  <div className="flex min-w-0 items-center gap-2 xl:min-w-[220px]">
-                    <span className="flex shrink-0 items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500"><Globe2 className="w-3 h-3" /> Lang</span>
-                    <div className="relative min-w-0 flex-1">
-                      <select value={lang} onChange={(e) => setLang(e.target.value)} className={`h-9 w-full appearance-none pr-8 ${INPUT_COMPACT_CLASS}`}>
-                        {supportedLanguages.map((language) => (
-                          <option key={language.code} value={language.code} className="bg-[#0a0a0a]">
-                            {language.flag} {language.label}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronRight className="absolute right-2 top-3 w-3 h-3 rotate-90 stroke-2 text-slate-500 pointer-events-none" />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex min-w-0 items-center gap-2 xl:min-w-[220px]">
-                    <span className="flex shrink-0 items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-slate-500"><Globe2 className="w-3 h-3" /> Lang</span>
-                    <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-white/10 bg-[#080808] px-2.5 py-2 text-[10px] text-slate-500">
-                      <Globe2 className="w-3 h-3 shrink-0" /> Add TMDB key for lang
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
             <div className="relative z-10 grid grid-cols-1 gap-4 xl:premium-scrollbar xl:min-h-0 xl:flex-1 xl:overflow-hidden xl:grid-cols-[minmax(0,1.08fr)_minmax(0,1.28fr)_minmax(0,0.88fr)] xl:items-stretch">
               {/* Controls */}
               <div className="min-w-0 w-full flex flex-col gap-3 xl:self-stretch xl:premium-scrollbar xl:min-h-0 xl:h-full xl:overflow-y-auto xl:pr-1">
@@ -648,7 +828,7 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                       <Settings2 className="h-3.5 w-3.5" />
                       <span>Configurator</span>
                     </div>
-                    <p className="text-xs text-slate-400">Adjust parameters to generate the config string and update the live preview.</p>
+                    <p className="text-xs text-slate-400">Adjust parameters and update the live preview in real time.</p>
                   </div>
                   <div className={`${INNER_PANEL_CLASS} p-3 space-y-3`}>
                     <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Access Keys</div>
@@ -668,6 +848,105 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                     </div>
                   </div>
 
+                  {previewType === 'poster' && tmdbKey && (
+                    <div className={`${INNER_PANEL_CLASS} p-3 space-y-3`}>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Poster Language</div>
+                      <div className="relative max-w-[220px]">
+                        <select value={posterLang} onChange={(e) => setPosterLang(e.target.value)} className={`h-8 w-full appearance-none pr-7 ${INPUT_COMPACT_CLASS}`}>
+                          <option value="" className="bg-[#0a0a0a]">Global ({lang})</option>
+                          <option value="original" className="bg-[#0a0a0a]">Native Language</option>
+                          {supportedLanguages.map((language) => (
+                            <option key={language.code} value={language.code} className="bg-[#0a0a0a]">
+                              {language.flag} {language.label}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronRight className="absolute right-2 top-2.5 w-3 h-3 rotate-90 stroke-2 text-slate-500 pointer-events-none" />
+                      </div>
+                      <div>
+                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Poster Language Anime</div>
+                        <div className="relative max-w-[220px]">
+                          <select value={posterAnimeLang} onChange={(e) => setPosterAnimeLang(e.target.value)} className={`h-8 w-full appearance-none pr-7 ${INPUT_COMPACT_CLASS}`}>
+                            <option value="" className="bg-[#0a0a0a]">Global ({lang})</option>
+                            <option value="original" className="bg-[#0a0a0a]">Native Language</option>
+                            {supportedLanguages.map((language) => (
+                              <option key={language.code} value={language.code} className="bg-[#0a0a0a]">
+                                {language.flag} {language.label}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronRight className="absolute right-2 top-2.5 w-3 h-3 rotate-90 stroke-2 text-slate-500 pointer-events-none" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {previewType === 'backdrop' && tmdbKey && (
+                    <div className={`${INNER_PANEL_CLASS} p-3 space-y-3`}>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Backdrop Language</div>
+                      <div className="relative max-w-[220px]">
+                        <select value={backdropLang} onChange={(e) => setBackdropLang(e.target.value)} className={`h-8 w-full appearance-none pr-7 ${INPUT_COMPACT_CLASS}`}>
+                          <option value="" className="bg-[#0a0a0a]">Global ({lang})</option>
+                          <option value="original" className="bg-[#0a0a0a]">Native Language</option>
+                          {supportedLanguages.map((language) => (
+                            <option key={language.code} value={language.code} className="bg-[#0a0a0a]">
+                              {language.flag} {language.label}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronRight className="absolute right-2 top-2.5 w-3 h-3 rotate-90 stroke-2 text-slate-500 pointer-events-none" />
+                      </div>
+                      <div>
+                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Backdrop Language Anime</div>
+                        <div className="relative max-w-[220px]">
+                          <select value={backdropAnimeLang} onChange={(e) => setBackdropAnimeLang(e.target.value)} className={`h-8 w-full appearance-none pr-7 ${INPUT_COMPACT_CLASS}`}>
+                            <option value="" className="bg-[#0a0a0a]">Global ({lang})</option>
+                            <option value="original" className="bg-[#0a0a0a]">Native Language</option>
+                            {supportedLanguages.map((language) => (
+                              <option key={language.code} value={language.code} className="bg-[#0a0a0a]">
+                                {language.flag} {language.label}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronRight className="absolute right-2 top-2.5 w-3 h-3 rotate-90 stroke-2 text-slate-500 pointer-events-none" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {previewType === 'logo' && tmdbKey && (
+                    <div className={`${INNER_PANEL_CLASS} p-3 space-y-3`}>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Logo Language</div>
+                      <div className="relative max-w-[220px]">
+                        <select value={logoLang} onChange={(e) => setLogoLang(e.target.value)} className={`h-8 w-full appearance-none pr-7 ${INPUT_COMPACT_CLASS}`}>
+                          <option value="" className="bg-[#0a0a0a]">Global ({lang})</option>
+                          <option value="original" className="bg-[#0a0a0a]">Native Language</option>
+                          {supportedLanguages.map((language) => (
+                            <option key={language.code} value={language.code} className="bg-[#0a0a0a]">
+                              {language.flag} {language.label}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronRight className="absolute right-2 top-2.5 w-3 h-3 rotate-90 stroke-2 text-slate-500 pointer-events-none" />
+                      </div>
+                      <div>
+                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Logo Language Anime</div>
+                        <div className="relative max-w-[220px]">
+                          <select value={logoAnimeLang} onChange={(e) => setLogoAnimeLang(e.target.value)} className={`h-8 w-full appearance-none pr-7 ${INPUT_COMPACT_CLASS}`}>
+                            <option value="" className="bg-[#0a0a0a]">Global ({lang})</option>
+                            <option value="original" className="bg-[#0a0a0a]">Native Language</option>
+                            {supportedLanguages.map((language) => (
+                              <option key={language.code} value={language.code} className="bg-[#0a0a0a]">
+                                {language.flag} {language.label}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronRight className="absolute right-2 top-2.5 w-3 h-3 rotate-90 stroke-2 text-slate-500 pointer-events-none" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className={`${INNER_PANEL_CLASS} p-3 space-y-3`}>
                     <div className="flex flex-wrap gap-3 items-center">
                       <div>
@@ -682,10 +961,30 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                         <div>
                           <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">{textLabel}</span>
                           <div className={SEGMENT_CLASS}>
-                            {(['original', 'clean', 'alternative'] as const).map(option => (
+                            {(['default', 'clean', 'alternative'] as const).map(option => (
                               <button key={option} onClick={() => setImageTextForType(option)} className={`px-2 py-1 rounded text-xs font-bold transition-all ${activeImageText === option ? 'border border-orange-400/20 bg-orange-500/10 text-white' : 'border border-transparent text-slate-400 hover:text-white'}`}>{option.charAt(0).toUpperCase() + option.slice(1)}</button>
                             ))}
                           </div>
+                          {previewType === 'poster' && (
+                            <div className="mt-3">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">Poster Text Anime</span>
+                              <div className={SEGMENT_CLASS}>
+                                {(['default', 'clean', 'alternative'] as const).map(option => (
+                                  <button key={option} onClick={() => setPosterAnimeImageText(option)} className={`px-2 py-1 rounded text-xs font-bold transition-all ${posterAnimeImageText === option ? 'border border-orange-400/20 bg-orange-500/10 text-white' : 'border border-transparent text-slate-400 hover:text-white'}`}>{option.charAt(0).toUpperCase() + option.slice(1)}</button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {previewType === 'backdrop' && (
+                            <div className="mt-3">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 block mb-1">Backdrop Text Anime</span>
+                              <div className={SEGMENT_CLASS}>
+                                {(['default', 'clean', 'alternative'] as const).map(option => (
+                                  <button key={option} onClick={() => setBackdropAnimeImageText(option)} className={`px-2 py-1 rounded text-xs font-bold transition-all ${backdropAnimeImageText === option ? 'border border-orange-400/20 bg-orange-500/10 text-white' : 'border border-transparent text-slate-400 hover:text-white'}`}>{option.charAt(0).toUpperCase() + option.slice(1)}</button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -733,6 +1032,14 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                         {BACKDROP_RATING_LAYOUT_OPTIONS.map(opt => (
                           <button key={opt.id} onClick={() => setBackdropRatingsLayout(opt.id as BackdropRatingLayout)} className={`rounded-lg border px-2 py-1.5 text-[11px] font-bold transition-all ${backdropRatingsLayout === opt.id ? 'border-orange-400/20 bg-orange-500/10 text-white' : 'border-white/10 bg-[#0a0a0a] text-slate-400 hover:text-white'}`}>{opt.label}</button>
                         ))}
+                      </div>
+                      <div className="pt-1">
+                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Backdrop Ratings Size</div>
+                        <div className="flex flex-wrap gap-1">
+                          {BACKDROP_RATINGS_SIZE_OPTIONS.map(opt => (
+                            <button key={opt.id} onClick={() => setBackdropRatingsSize(opt.id as BackdropRatingsSize)} className={`rounded-lg border px-2 py-1.5 text-[11px] font-bold transition-all ${backdropRatingsSize === opt.id ? 'border-orange-400/20 bg-orange-500/10 text-white' : 'border-white/10 bg-[#0a0a0a] text-slate-400 hover:text-white'}`}>{opt.label}</button>
+                          ))}
+                        </div>
                       </div>
                       {shouldShowVerticalBadgeContent && (
                         <div className="pt-1 space-y-2">
@@ -782,6 +1089,124 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                   )}
                   {previewType === 'logo' && (
                     <div className={`${INNER_PANEL_CLASS} p-3 space-y-2`}>
+                      <div>
+                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Logo Mode</div>
+                        <div className="flex flex-wrap gap-1">
+                          {LOGO_MODE_OPTIONS.map((option) => (
+                            <button
+                              key={option.id}
+                              onClick={() => setLogoMode(option.id)}
+                              className={`rounded-lg border px-2 py-1.5 text-[11px] font-bold transition-all ${logoMode === option.id ? 'border-orange-400/20 bg-orange-500/10 text-white' : 'border-white/10 bg-[#0a0a0a] text-slate-400 hover:text-white'}`}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {logoMode === 'custom-logo' && (
+                        <div className="space-y-3">
+                          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Logo Font</div>
+                          <div className="flex flex-wrap gap-1">
+                            {LOGO_FONT_VARIANT_OPTIONS.map((option) => (
+                              <button
+                                key={option.id}
+                                onClick={() => setLogoFontVariant(option.id)}
+                                className={`rounded-lg border px-2 py-1.5 text-[11px] font-bold transition-all ${logoFontVariant === option.id ? 'border-orange-400/20 bg-orange-500/10 text-white' : 'border-white/10 bg-[#0a0a0a] text-slate-400 hover:text-white'}`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="grid gap-3 lg:grid-cols-3">
+                            <label className="space-y-1">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Primary</span>
+                              <div className="flex min-w-0 items-center gap-2">
+                                <input
+                                  type="color"
+                                  value={logoCustomPrimary}
+                                  onChange={(e) => setLogoCustomPrimary(e.target.value)}
+                                  className="h-9 w-14 shrink-0 cursor-pointer rounded border border-white/10 bg-[#0a0a0a] p-1"
+                                />
+                                <input
+                                  type="text"
+                                  value={logoCustomPrimary}
+                                  onChange={(e) => setLogoCustomPrimary(e.target.value)}
+                                  className={`min-w-0 flex-1 ${INPUT_COMPACT_CLASS}`}
+                                />
+                              </div>
+                            </label>
+                            <label className="space-y-1">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Secondary</span>
+                              <div className="flex min-w-0 items-center gap-2">
+                                <input
+                                  type="color"
+                                  value={logoCustomSecondary}
+                                  onChange={(e) => setLogoCustomSecondary(e.target.value)}
+                                  className="h-9 w-14 shrink-0 cursor-pointer rounded border border-white/10 bg-[#0a0a0a] p-1"
+                                />
+                                <input
+                                  type="text"
+                                  value={logoCustomSecondary}
+                                  onChange={(e) => setLogoCustomSecondary(e.target.value)}
+                                  className={`min-w-0 flex-1 ${INPUT_COMPACT_CLASS}`}
+                                />
+                              </div>
+                            </label>
+                            <label className="space-y-1">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Outline</span>
+                              <div className="flex min-w-0 items-center gap-2">
+                                <input
+                                  type="color"
+                                  value={logoCustomOutline}
+                                  onChange={(e) => setLogoCustomOutline(e.target.value)}
+                                  className="h-9 w-14 shrink-0 cursor-pointer rounded border border-white/10 bg-[#0a0a0a] p-1"
+                                />
+                                <input
+                                  type="text"
+                                  value={logoCustomOutline}
+                                  onChange={(e) => setLogoCustomOutline(e.target.value)}
+                                  className={`min-w-0 flex-1 ${INPUT_COMPACT_CLASS}`}
+                                />
+                              </div>
+                            </label>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Color Presets</div>
+                            <div className="flex flex-wrap gap-1">
+                              {LOGO_COLOR_PRESETS.map((preset) => (
+                                <button
+                                  key={preset.id}
+                                  onClick={() => {
+                                    setLogoCustomPrimary(preset.primary);
+                                    setLogoCustomSecondary(preset.secondary);
+                                    setLogoCustomOutline(preset.outline);
+                                  }}
+                                  className="rounded-lg border border-white/10 bg-[#0a0a0a] px-2 py-1.5 text-[11px] font-bold text-slate-300 transition-all hover:text-white"
+                                >
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: preset.primary }} />
+                                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: preset.secondary }} />
+                                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: preset.outline }} />
+                                    <span>{preset.label}</span>
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() => {
+                                setLogoCustomPrimary(DEFAULT_LOGO_CUSTOM_PRIMARY);
+                                setLogoCustomSecondary(DEFAULT_LOGO_CUSTOM_SECONDARY);
+                                setLogoCustomOutline(DEFAULT_LOGO_CUSTOM_OUTLINE);
+                              }}
+                              className="rounded-lg border border-white/10 bg-[#0a0a0a] px-2 py-1.5 text-[11px] text-slate-300 hover:bg-[#121212]"
+                            >
+                              Reset Colors
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Logo Ratings</div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Max badges</span>
@@ -854,12 +1279,32 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                   )}
 
                   <div className={`${INNER_PANEL_CLASS} p-3 space-y-2`}>
-                    <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                      {providersLabel} - drag the grip to reorder (left to right / top to bottom)
-                    </span>
-                    <span className="block text-[10px] text-slate-500/80">
-                      Order flows top to bottom, then continues in the right column.
-                    </span>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                          {providersLabel} - drag the grip to reorder (left to right / top to bottom)
+                        </span>
+                        <span className="block text-[10px] text-slate-500/80">
+                          Order flows top to bottom, then continues in the right column.
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          onClick={enableAllRatingPreferences}
+                          className="rounded-lg border border-white/10 bg-[#0a0a0a] px-2 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:bg-[#121212]"
+                        >
+                          Enable all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={disableAllRatingPreferences}
+                          className="rounded-lg border border-white/10 bg-[#0a0a0a] px-2 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:bg-[#121212]"
+                        >
+                          Disable all
+                        </button>
+                      </div>
+                    </div>
                     <RatingProviderSortableList
                       rows={ratingProviderRows}
                       onReorder={reorderRatingPreference}
@@ -892,81 +1337,22 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                         </div>
                       </div>
                     ) : previewUrl ? (
-                      <div className="relative z-10 flex h-full min-h-0 w-full items-center justify-center">
-                        <div className={`relative overflow-hidden rounded-[24px] border border-white/10 bg-[#030303] shadow-[0_24px_70px_-35px_rgba(0,0,0,1)] ring-1 ring-white/8 ${previewType === 'poster'
-                          ? 'aspect-[2/3] h-full max-h-full w-auto max-w-full'
-                          : previewType === 'logo'
-                            ? 'w-full max-w-2xl max-h-full'
-                            : 'aspect-video w-full max-w-full max-h-full'
-                          }`}>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            key={previewUrl}
-                            src={previewUrl}
-                            alt="Preview"
-                            className={
-                              previewType === 'logo'
-                                ? 'block w-full h-auto'
-                                : 'h-full w-full object-contain'
-                            }
-                          />
-                        </div>
+                      <div className="relative z-10 flex h-full min-h-0 w-full items-center justify-center p-1">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={previewUrl}
+                          alt="Preview"
+                          className={`relative overflow-hidden rounded-[24px] border border-white/10 bg-[#030303] shadow-[0_24px_70px_-35px_rgba(0,0,0,1)] ring-1 ring-white/8 ${
+                            previewType === 'logo'
+                              ? 'block w-full max-w-2xl h-auto'
+                              : 'block max-w-full max-h-full w-auto h-auto'
+                          }`}
+                        />
                       </div>
                     ) : (
                       <div className="relative z-10 text-sm text-slate-500">No preview available.</div>
                     )}
                   </div>
-                </div>
-
-                <div className={`${AUX_PANEL_CLASS} shrink-0 p-4`}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-teal-400/20 bg-teal-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.28em] text-teal-100">
-                      <Code2 className="h-3.5 w-3.5" />
-                      <span>ERDB Config String</span>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        onClick={handleCopyConfig}
-                        disabled={!canGenerateConfig}
-                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors ${canGenerateConfig ? (configCopied ? 'bg-green-500 text-white' : 'bg-orange-500 text-black hover:bg-orange-400') : 'bg-[#121212] text-slate-500 cursor-not-allowed'}`}
-                      >
-                        {configCopied ? (
-                          <>
-                            <Check className="w-3.5 h-3.5" />
-                            <span>COPIED</span>
-                          </>
-                        ) : (
-                          <>
-                            <Clipboard className="w-3.5 h-3.5" />
-                            <span>COPY STRING</span>
-                          </>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={toggleConfigStringVisibility}
-                        disabled={!canGenerateConfig}
-                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1.5 transition-colors ${canGenerateConfig ? 'border border-white/10 bg-[#0a0a0a] text-slate-200 hover:bg-[#121212]' : 'border border-white/5 bg-[#080808] text-slate-600 cursor-not-allowed'}`}
-                      >
-                        {isConfigStringVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                        <span>{isConfigStringVisible ? 'HIDE' : 'SHOW'}</span>
-                      </button>
-                    </div>
-                  </div>
-                  <div
-                    className="mt-3 overflow-hidden rounded-xl bg-black/20 p-3 xl:premium-scrollbar xl:overflow-x-auto xl:overflow-y-hidden"
-                    onWheel={handleHorizontalScrollWheel}
-                  >
-                    <div className={`w-full max-w-full break-all font-mono text-xs leading-5 text-slate-300 whitespace-normal xl:w-max xl:min-w-full xl:whitespace-nowrap xl:pr-2 ${canGenerateConfig && !isConfigStringVisible ? 'select-none' : ''}`}>
-                      {displayedConfigString || 'Add TMDB key and MDBList key to generate the config string.'}
-                    </div>
-                  </div>
-                  {!canGenerateConfig && (
-                    <p className="mt-3 text-[11px] text-slate-500">
-                      Add TMDB key and MDBList key to generate a valid config string.
-                    </p>
-                  )}
-
                 </div>
 
               </div>
@@ -1349,8 +1735,8 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                           </tr>
                           <tr>
                             <td className="px-5 py-2 font-mono text-orange-400 text-xs">imageText</td>
-                            <td className="px-5 py-2 text-slate-400 text-xs">original, clean, alternative</td>
-                            <td className="px-5 py-2 text-slate-500 text-xs">original (poster), clean (backdrop)</td>
+                            <td className="px-5 py-2 text-slate-400 text-xs">default, clean, alternative</td>
+                            <td className="px-5 py-2 text-slate-500 text-xs">default (poster), clean (backdrop)</td>
                           </tr>
                           <tr>
                             <td className="px-5 py-2 font-mono text-orange-400 text-xs">posterRatingsLayout</td>
@@ -1425,7 +1811,7 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                             </td>
                             <td className="px-5 py-2 text-slate-400 text-xs">
                               <div className="space-y-1">
-                                <div>original, clean, alternative</div>
+                                <div>default, clean, alternative</div>
                                 <div>top, bottom, left, right, top-bottom, left-right</div>
                                 <div>1-20 (auto if omitted)</div>
                                 <div>standard, stacked (when using left/right vertical poster layouts)</div>
@@ -1443,7 +1829,7 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                             </td>
                             <td className="px-5 py-2 text-slate-400 text-xs">
                               <div className="space-y-1">
-                                <div>original, clean, alternative</div>
+                                <div>default, clean, alternative</div>
                                 <div>center, right-vertical</div>
                                 <div>standard, stacked (when using right-vertical)</div>
                               </div>
@@ -1583,118 +1969,7 @@ export function WorkspacePageView({ refs, state, derived, actions }: HomePageVie
                       </div>
                     </div>
 
-                    <div className="mb-10 bg-orange-500/5 border border-orange-500/10 rounded-2xl md:rounded-3xl p-5 md:p-8">
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
-                        <div className="flex items-center gap-4">
-                          <div className="p-3 bg-orange-500/20 rounded-2xl">
-                            <Bot className="w-6 h-6 text-orange-500" />
-                          </div>
-                          <div>
-                            <h4 className="text-lg font-[var(--font-display)] text-white">AI Developer Prompt</h4>
-                            <p className="text-xs text-slate-500">Copy this prompt to help an AI agent implement this API in your addon.</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={handleCopyPrompt}
-                            className={`mt-4 px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${copied ? 'bg-green-500 text-white' : 'bg-orange-500 text-black hover:bg-orange-400'}`}
-                          >
-                            {copied ? (
-                              <>
-                                <Check className="w-4 h-4" />
-                                <span>COPIED!</span>
-                              </>
-                            ) : (
-                              <>
-                                <Clipboard className="w-4 h-4" />
-                                <span>COPY PROMPT</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="bg-[#0a0a0a]/80 border border-white/5 rounded-xl p-4 font-mono text-[11px] text-slate-400 leading-relaxed overflow-auto relative max-h-[340px]">
-                        <div className="whitespace-pre-wrap">{`Act as an expert addon developer. I want to implement the ERDB Stateless API into my media center addon.
-
---- CONFIG INPUT ---
-Add a single text field called "erdbConfig" (base64url). The user will paste it from the ERDB site after configuring there.
-Do NOT hardcode API keys or base URL. Always use cfg.baseUrl from erdbConfig.
-
---- DECODE ---
-Node/JS: const cfg = JSON.parse(Buffer.from(erdbConfig, 'base64url').toString('utf8'));
-
---- FULL API REFERENCE ---
-Endpoint: GET /{type}/{id}.jpg?...queryParams
-
-Parameter               | Values                                                              | Default
-type (path)             | poster, backdrop, logo                                               | -
-id (path)               | IMDb (tt...), TMDB (tmdb:id / tmdb:movie:id / tmdb:tv:id), Kitsu (kitsu:id), AniList, MAL          | -
-ratings                 | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
-                        | myanimelist, anilist, kitsu (global fallback)                       |
-posterRatings           | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
-                        | myanimelist, anilist, kitsu (poster only)                           |
-backdropRatings         | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
-                        | myanimelist, anilist, kitsu (backdrop only)                         |
-logoRatings             | tmdb, mdblist, imdb, tomatoes, tomatoesaudience, letterboxd,         | all
-                        | metacritic, metacriticuser, trakt, simkl, rogerebert,               |
-                        | myanimelist, anilist, kitsu (logo only)                             |
-logoRatingsMax          | Number (1-20)                                                        | auto
-lang                    | Any TMDB language code (en, es-ES, es-MX, pt-PT, pt-BR, etc.)        | en
-streamBadges            | auto, on, off (global fallback)                                      | auto
-posterStreamBadges      | auto, on, off (poster only)                                          | auto
-backdropStreamBadges    | auto, on, off (backdrop only)                                        | auto
-qualityBadgesSide       | left, right (poster top-bottom only)                                 | left
-posterQualityBadgesPosition | auto, left, right (poster top/bottom only)                       | auto
-qualityBadgesStyle      | glass, square, plain (global fallback)                               | glass
-posterQualityBadgesStyle| glass, square, plain (poster only)                                   | glass
-backdropQualityBadgesStyle| glass, square, plain (backdrop only)                               | glass
-ratingStyle             | glass, square, plain                                                 | glass
-imageText               | original, clean, alternative                                         | original
-posterRatingsLayout     | top, bottom, left, right, top-bottom, left-right                     | top-bottom
-posterRatingsMaxPerSide | Number (1-20)                                                        | auto
-backdropRatingsLayout   | center, right-vertical                                               | center
-thumbnailRatingsLayout  | center + thumbnail-only side/top/bottom/vertical variants            | center
-posterVerticalBadgeContent   | standard, stacked (poster vertical layouts only)                 | standard
-backdropVerticalBadgeContent | standard, stacked (backdrop vertical layouts only)               | standard
-thumbnailVerticalBadgeContent| standard, stacked (thumbnail vertical layouts only)              | standard
-thumbnailSize           | small, medium, large                                                 | medium
-tmdbKey (REQUIRED)      | Your TMDB v3 API Key                                                 | -
-mdblistKey (REQUIRED)   | Your MDBList.com API Key                                             | -
-simklClientId (OPTIONAL)| Your SIMKL client_id for direct SIMKL ratings                        | -
-
-TMDB NOTE: Always prefer tmdb:movie:id or tmdb:tv:id. Using bare tmdb:id can collide between movie and tv.
-LANG NOTE: Pass cfg.lang through exactly as the TMDB language code provided by ERDB (for example en, it, es-ES, pt-BR).
-
---- INTEGRATION REQUIREMENTS ---
-1. Use ONLY the "erdbConfig" field (no modal and no extra settings panels).
-2. Add toggles to enable/disable: poster, backdrop, logo, thumbnail.
-3. If a type is disabled, keep the original artwork (do not call ERDB for that type).
-4. Build ERDB URLs using the decoded config and inject them into both catalog and meta responses.
-
---- PER-TYPE SETTINGS ---
-poster   -> ratingStyle = cfg.posterRatingStyle, imageText = cfg.posterImageText
-backdrop -> ratingStyle = cfg.backdropRatingStyle, imageText = cfg.backdropImageText
-thumbnail -> ratingStyle = cfg.backdropRatingStyle, thumbnailRatingsLayout = cfg.thumbnailRatingsLayout, thumbnailSize = cfg.thumbnailSize
-logo     -> ratingStyle = cfg.logoRatingStyle, logoRatingsMax = cfg.logoRatingsMax (omit imageText)
-Ratings providers can be set per-type via cfg.posterRatings / cfg.backdropRatings / cfg.logoRatings (fallback to cfg.ratings). Thumbnail ratings are episode-level and currently support TMDB + IMDb only.
-Quality badges style can be set per-type via cfg.posterQualityBadgesStyle / cfg.backdropQualityBadgesStyle (fallback to cfg.qualityBadgesStyle).
-Use cfg.posterVerticalBadgeContent for poster vertical layouts, cfg.backdropVerticalBadgeContent for backdrop, and cfg.thumbnailVerticalBadgeContent for thumbnail vertical layouts when you want icon and value stacked instead of inline.
-
---- URL BUILD ---
-const typeRatingStyle = type === 'poster' ? cfg.posterRatingStyle : type === 'backdrop' ? cfg.backdropRatingStyle : cfg.logoRatingStyle;
-const typeImageText = type === 'backdrop' ? cfg.backdropImageText : cfg.posterImageText;
-\${cfg.baseUrl}/\${type}/\${id}.jpg?tmdbKey=\${cfg.tmdbKey}&mdblistKey=\${cfg.mdblistKey}&simklClientId=\${cfg.simklClientId}&ratings=\${cfg.ratings}&posterRatings=\${cfg.posterRatings}&backdropRatings=\${cfg.backdropRatings}&logoRatings=\${cfg.logoRatings}&logoRatingsMax=\${cfg.logoRatingsMax}&lang=\${cfg.lang}&streamBadges=\${cfg.streamBadges}&posterStreamBadges=\${cfg.posterStreamBadges}&backdropStreamBadges=\${cfg.backdropStreamBadges}&qualityBadgesSide=\${cfg.qualityBadgesSide}&posterQualityBadgesPosition=\${cfg.posterQualityBadgesPosition}&qualityBadgesStyle=\${cfg.qualityBadgesStyle}&posterQualityBadgesStyle=\${cfg.posterQualityBadgesStyle}&backdropQualityBadgesStyle=\${cfg.backdropQualityBadgesStyle}&ratingStyle=\${typeRatingStyle}&imageText=\${typeImageText}&posterRatingsLayout=\${cfg.posterRatingsLayout}&posterRatingsMaxPerSide=\${cfg.posterRatingsMaxPerSide}&backdropRatingsLayout=\${cfg.backdropRatingsLayout}&posterVerticalBadgeContent=\${cfg.posterVerticalBadgeContent}&backdropVerticalBadgeContent=\${cfg.backdropVerticalBadgeContent}&thumbnailVerticalBadgeContent=\${cfg.thumbnailVerticalBadgeContent}
-
-For thumbnails use thumbnailRatingsLayout and thumbnailSize instead of imageText.
-Omit imageText when type=logo or type=thumbnail.
-
-Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRatings/logoRatings to disable providers.`}</div>
-                      </div>
-
+                    <div className="mb-10">
                       <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Live Examples</h4>
                       <pre className="text-xs font-mono text-slate-400 leading-6 space-y-1.5">
                         <div className="text-slate-600 font-bold">{'// Movie Poster (IMDb)'}</div>
@@ -1702,7 +1977,6 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
 
                         <div className="text-slate-600 font-bold mt-4">{'// Backdrop (TMDB)'}</div>
                         <div className="text-orange-200/70 truncate bg-white/[0.04] p-3 rounded-lg border border-white/5">{`${baseUrl || 'http://localhost:3000'}/backdrop/tmdb:603.jpg?ratings=mdblist&backdropRatingsLayout=right-vertical`}</div>
-
                       </pre>
                     </div>
                   </div>
@@ -1975,5 +2249,135 @@ Skip any params that are undefined. Keep empty ratings/posterRatings/backdropRat
         )}
       </div>
     </div>
+
+
+    {/* Rotate Token Modal */}
+    {isRotateModalOpen && (
+      <div
+        className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+        onClick={(e) => { if (e.target === e.currentTarget) handleCloseRotateModal(); }}
+      >
+        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+        <div className="relative w-full max-w-md overflow-hidden rounded-[28px] border border-white/10 bg-[#0c0d10] shadow-[0_40px_140px_-30px_rgba(0,0,0,1)]">
+          {/* Header */}
+          <div className="border-b border-white/10 px-6 py-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-orange-500/10 ring-1 ring-orange-400/20">
+                <RefreshCcw className="h-5 w-5 text-orange-300" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-white">Rotate Token</div>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  Genera un nuovo token e migra automaticamente la configurazione.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4 px-6 py-5">
+            {rotateStatus !== 'success' && (
+              <>
+                {/* Warning */}
+                <div className="flex items-start gap-3 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+                  <p className="text-[11px] leading-5 text-amber-200">
+                    The old token will be <strong>permanently deleted</strong> and replaced with a new one using the same configuration and password.
+                    Update your saved credentials after rotation.
+                  </p>
+                </div>
+
+                {/* Password input */}
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Current token password
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={rotateShowPassword ? 'text' : 'password'}
+                      value={rotatePassword}
+                      onChange={(e) => setRotatePassword(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && rotateStatus !== 'loading') handleRotateToken(); }}
+                      placeholder="Your password"
+                      className="w-full rounded-2xl border border-white/10 bg-white/[0.04] py-3 pl-4 pr-11 text-sm text-white outline-none transition focus:border-orange-400/50"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRotateShowPassword((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+                    >
+                      {rotateShowPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {rotateMessage && (
+                  <p className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                    {rotateMessage}
+                  </p>
+                )}
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleCloseRotateModal}
+                    className="flex-1 rounded-2xl border border-white/10 bg-white/[0.04] py-3 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.08]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleRotateToken}
+                    disabled={rotateStatus === 'loading' || !rotatePassword}
+                    className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-orange-500 py-3 text-sm font-semibold text-black transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <RefreshCcw className={`h-4 w-4 ${rotateStatus === 'loading' ? 'animate-spin' : ''}`} />
+                    {rotateStatus === 'loading' ? 'Rotating...' : 'Generate New Token'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {rotateStatus === 'success' && (
+              <>
+                {/* Success state */}
+                <div className="flex items-start gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3">
+                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                  <p className="text-[11px] leading-5 text-emerald-200">
+                    Token rotated successfully. Your configuration has been automatically migrated.
+                    Your browser will be prompted to update saved credentials.
+                  </p>
+                </div>
+
+                {/* New token display */}
+                <div>
+                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    New Token
+                  </div>
+                  <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-[#080808] px-4 py-3">
+                    <span className="flex-1 break-all font-mono text-xs text-white">{rotatedNewToken}</span>
+                    <button
+                      onClick={handleCopyRotatedToken}
+                      className="shrink-0 rounded-lg bg-white/[0.06] p-2 transition hover:bg-white/[0.12]"
+                    >
+                      {rotateCopied ? <Check className="h-4 w-4 text-emerald-300" /> : <Clipboard className="h-4 w-4 text-slate-300" />}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Save this token. Use it with the same password on your next login.
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleCloseRotateModal}
+                  className="w-full rounded-2xl bg-emerald-500 py-3 text-sm font-semibold text-black transition hover:bg-emerald-400"
+                >
+                  Close and reload
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

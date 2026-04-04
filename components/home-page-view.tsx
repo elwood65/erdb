@@ -10,8 +10,11 @@ import type { RatingProviderRow } from '@/lib/ratingRows';
 import type { BackdropRatingLayout } from '@/lib/backdropRatingLayout';
 import type { ThumbnailRatingLayout } from '@/lib/thumbnailRatingLayout';
 import type { ThumbnailSize } from '@/lib/thumbnailSize';
+import type { BackdropRatingsSize } from '@/lib/backdropRatingsSize';
 import type { PosterRatingLayout } from '@/lib/posterRatingLayout';
 import type { RatingStyle } from '@/lib/ratingStyle';
+import type { LogoMode } from '@/lib/logoMode';
+import type { LogoFontVariant } from '@/lib/logoFontVariant';
 
 type PreviewType = 'poster' | 'backdrop' | 'logo' | 'thumbnail';
 type ProxyType = PreviewType;
@@ -29,6 +32,14 @@ type HomePageViewState = {
   previewType: PreviewType;
   mediaId: string;
   lang: string;
+  posterLang: string;
+  posterAnimeLang: string;
+  backdropLang: string;
+  backdropAnimeLang: string;
+  logoLang: string;
+  logoAnimeLang: string;
+  posterAnimeImageText: 'default' | 'clean' | 'alternative';
+  backdropAnimeImageText: 'default' | 'clean' | 'alternative';
   supportedLanguages: SupportedLanguage[];
   tmdbKey: string;
   mdblistKey: string;
@@ -51,7 +62,13 @@ type HomePageViewState = {
   posterRatingsLayout: PosterRatingLayout;
   posterRatingsMaxPerSide: number | null;
   logoRatingsMax: number | null;
+  logoMode: LogoMode;
+  logoFontVariant: LogoFontVariant;
+  logoCustomPrimary: string;
+  logoCustomSecondary: string;
+  logoCustomOutline: string;
   backdropRatingsLayout: BackdropRatingLayout;
+  backdropRatingsSize: BackdropRatingsSize;
   thumbnailRatingsLayout: ThumbnailRatingLayout;
   posterVerticalBadgeContent: VerticalBadgeContent;
   backdropVerticalBadgeContent: VerticalBadgeContent;
@@ -59,11 +76,12 @@ type HomePageViewState = {
   thumbnailSize: ThumbnailSize;
   qualityBadgesSide: QualityBadgesSide;
   posterQualityBadgesPosition: PosterQualityBadgesPosition;
-  configCopied: boolean;
   proxyCopied: boolean;
   copied: boolean;
   aiometadataCopiedType: AiometadataPatternType | null;
   aiometadataEpisodeProvider: AiometadataEpisodeProvider;
+  activeToken: string | null;
+  configSaveStatus: 'idle' | 'saving' | 'saved' | 'error';
 };
 
 type HomePageViewDerived = {
@@ -74,17 +92,14 @@ type HomePageViewDerived = {
   githubPackageVersion: string | null;
   repoUrl: string | null;
   previewNotice: string | null;
-  canGenerateConfig: boolean;
   canGenerateProxy: boolean;
-  isConfigStringVisible: boolean;
   isProxyUrlVisible: boolean;
-  displayedConfigString: string;
   displayedProxyUrl: string;
   styleLabel: string;
   textLabel: string;
   providersLabel: string;
   activeRatingStyle: RatingStyle;
-  activeImageText: 'original' | 'clean' | 'alternative';
+  activeImageText: 'default' | 'clean' | 'alternative';
   ratingProviderRows: RatingProviderRow[];
   shouldShowQualityBadgesPosition: boolean;
   shouldShowQualityBadgesSide: boolean;
@@ -99,20 +114,33 @@ type HomePageViewActions = {
   handleExportConfig: (includeKeys: boolean) => void;
   handleImportFile: (event: ChangeEvent<HTMLInputElement>) => void;
   handleImportConfigString: (value: string) => void;
-  handleCopyConfig: () => void;
   handleCopyProxy: () => void;
   handleCopyPrompt: () => void;
   handleCopyAiometadataPattern: (type: AiometadataPatternType) => void;
   setPreviewType: Dispatch<SetStateAction<PreviewType>>;
   setMediaId: Dispatch<SetStateAction<string>>;
   setLang: Dispatch<SetStateAction<string>>;
+  setPosterLang: Dispatch<SetStateAction<string>>;
+  setPosterAnimeLang: Dispatch<SetStateAction<string>>;
+  setBackdropLang: Dispatch<SetStateAction<string>>;
+  setBackdropAnimeLang: Dispatch<SetStateAction<string>>;
+  setLogoLang: Dispatch<SetStateAction<string>>;
+  setLogoAnimeLang: Dispatch<SetStateAction<string>>;
+  setPosterAnimeImageText: Dispatch<SetStateAction<'default' | 'clean' | 'alternative'>>;
+  setBackdropAnimeImageText: Dispatch<SetStateAction<'default' | 'clean' | 'alternative'>>;
   setTmdbKey: Dispatch<SetStateAction<string>>;
   setMdblistKey: Dispatch<SetStateAction<string>>;
   setSimklClientId: Dispatch<SetStateAction<string>>;
   setPosterRatingsLayout: Dispatch<SetStateAction<PosterRatingLayout>>;
   setPosterRatingsMaxPerSide: Dispatch<SetStateAction<number | null>>;
   setLogoRatingsMax: Dispatch<SetStateAction<number | null>>;
+  setLogoMode: Dispatch<SetStateAction<LogoMode>>;
+  setLogoFontVariant: Dispatch<SetStateAction<LogoFontVariant>>;
+  setLogoCustomPrimary: Dispatch<SetStateAction<string>>;
+  setLogoCustomSecondary: Dispatch<SetStateAction<string>>;
+  setLogoCustomOutline: Dispatch<SetStateAction<string>>;
   setBackdropRatingsLayout: Dispatch<SetStateAction<BackdropRatingLayout>>;
+  setBackdropRatingsSize: Dispatch<SetStateAction<BackdropRatingsSize>>;
   setThumbnailRatingsLayout: Dispatch<SetStateAction<ThumbnailRatingLayout>>;
   setPosterVerticalBadgeContent: Dispatch<SetStateAction<VerticalBadgeContent>>;
   setBackdropVerticalBadgeContent: Dispatch<SetStateAction<VerticalBadgeContent>>;
@@ -124,10 +152,12 @@ type HomePageViewActions = {
   setPosterQualityBadgesPosition: Dispatch<SetStateAction<PosterQualityBadgesPosition>>;
   setQualityBadgesSide: Dispatch<SetStateAction<QualityBadgesSide>>;
   setRatingStyleForType: (value: RatingStyle) => void;
-  setImageTextForType: (value: 'original' | 'clean' | 'alternative') => void;
+  setImageTextForType: (value: 'default' | 'clean' | 'alternative') => void;
   setActiveStreamBadges: Dispatch<SetStateAction<StreamBadgesSetting>>;
   setActiveQualityBadgesStyle: Dispatch<SetStateAction<RatingStyle>>;
   toggleRatingPreference: (rating: RatingPreference) => void;
+  enableAllRatingPreferences: () => void;
+  disableAllRatingPreferences: () => void;
   reorderRatingPreference: (fromIndex: number, toIndex: number) => void;
   updateProxyManifestUrl: (value: string) => void;
   updateProxyCatalogName: (key: string, value: string) => void;
@@ -138,8 +168,9 @@ type HomePageViewActions = {
   resetProxyCatalogCustomizations: () => void;
   toggleProxyEnabledType: (type: ProxyType) => void;
   toggleProxyTranslateMeta: () => void;
-  toggleConfigStringVisibility: () => void;
   toggleProxyUrlVisibility: () => void;
+  handleTokenDisconnect: () => void;
+  handleSaveConfig: () => void;
 };
 
 export type HomePageViewProps = {
@@ -234,11 +265,11 @@ export function HomePageView({ refs, derived }: HomePageViewProps) {
               <div className="flex flex-wrap gap-4 text-xs text-slate-400">
                 <div className="flex items-center gap-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-teal-300" />
-                  No accounts or tokens
+                  Token-based workspace access
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-orange-300" />
-                  Query-driven layouts
+                  Saved server-side layouts
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-sky-300" />
@@ -264,7 +295,7 @@ export function HomePageView({ refs, derived }: HomePageViewProps) {
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-[#0b0f15]/80 p-4">
                     <div className="text-xs text-slate-400">Live Output</div>
-                    <div className="mt-1 text-sm font-semibold text-white">Preview, config string, and proxy URL in one workspace</div>
+                    <div className="mt-1 text-sm font-semibold text-white">Preview, proxy URL, and AiOMetadata patterns in one workspace</div>
                   </div>
                 </div>
               </div>
