@@ -132,6 +132,7 @@ type HomePageViewState = {
   logoCustomSecondary: string;
   logoCustomOutline: string;
   backdropRatingsLayout: BackdropRatingLayout;
+  backdropRatingsMax: number | null;
   backdropRatingsSize: BackdropRatingsSize;
   thumbnailRatingsLayout: ThumbnailRatingLayout;
   posterVerticalBadgeContent: VerticalBadgeContent;
@@ -204,6 +205,7 @@ type HomePageViewActions = {
   setLogoCustomSecondary: Dispatch<SetStateAction<string>>;
   setLogoCustomOutline: Dispatch<SetStateAction<string>>;
   setBackdropRatingsLayout: Dispatch<SetStateAction<BackdropRatingLayout>>;
+  setBackdropRatingsMax: Dispatch<SetStateAction<number | null>>;
   setBackdropRatingsSize: Dispatch<SetStateAction<BackdropRatingsSize>>;
   setThumbnailRatingsLayout: Dispatch<SetStateAction<ThumbnailRatingLayout>>;
   setPosterVerticalBadgeContent: Dispatch<SetStateAction<VerticalBadgeContent>>;

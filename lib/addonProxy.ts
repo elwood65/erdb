@@ -33,7 +33,7 @@ const ERDB_OPTIONAL_PARAMS = [
 ];
 const ERDB_TYPE_OPTIONAL_PARAMS = {
   poster: ['posterStreamBadges', 'posterQualityBadgesStyle', 'posterRatings'],
-  backdrop: ['backdropStreamBadges', 'backdropQualityBadgesStyle', 'backdropRatings'],
+  backdrop: ['backdropStreamBadges', 'backdropQualityBadgesStyle', 'backdropRatings', 'backdropRatingsMax'],
   logo: ['logoRatings', 'logoRatingsMax', 'logoMode', 'logoFontVariant', 'logoPrimary', 'logoSecondary', 'logoOutline'],
   thumbnail: ['backdropStreamBadges', 'backdropQualityBadgesStyle', 'thumbnailRatings'],
 } as const;
@@ -136,6 +136,7 @@ export type ProxyConfig = {
   posterRatingsLayout?: string;
   posterRatingsMaxPerSide?: string;
   backdropRatingsLayout?: string;
+  backdropRatingsMax?: string;
   backdropRatingsSize?: string;
   thumbnailRatingsLayout?: string;
   posterVerticalBadgeContent?: string;
@@ -196,6 +197,7 @@ const PROXY_OPTIONAL_STRING_KEYS = [
   'posterRatingsLayout',
   'posterRatingsMaxPerSide',
   'backdropRatingsLayout',
+  'backdropRatingsMax',
   'backdropRatingsSize',
   'thumbnailRatingsLayout',
   'posterVerticalBadgeContent',

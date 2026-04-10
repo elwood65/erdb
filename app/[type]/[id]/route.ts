@@ -38,6 +38,7 @@ import {
   type PosterRatingLayout,
 } from '@/lib/posterRatingLayout';
 import { normalizeLogoRatingsMax } from '@/lib/logoRatingsMax';
+import { normalizeBackdropRatingsMax } from '@/lib/backdropRatingsMax';
 import { DEFAULT_LOGO_MODE, normalizeLogoMode, type LogoMode } from '@/lib/logoMode';
 import { DEFAULT_LOGO_FONT_VARIANT, normalizeLogoFontVariant, type LogoFontVariant } from '@/lib/logoFontVariant';
 import {
@@ -5845,6 +5846,7 @@ export async function GET(
   const posterRatingsLayout = normalizePosterRatingLayout(tokenConfig.posterRatingsLayout || request.nextUrl.searchParams.get('posterRatingsLayout'));
   const posterRatingsMaxPerSide = normalizePosterRatingsMaxPerSide(tokenConfig.posterRatingsMaxPerSide ?? request.nextUrl.searchParams.get('posterRatingsMaxPerSide'));
   const logoRatingsMax = normalizeLogoRatingsMax(tokenConfig.logoRatingsMax ?? request.nextUrl.searchParams.get('logoRatingsMax'));
+  const backdropRatingsMax = normalizeBackdropRatingsMax(tokenConfig.backdropRatingsMax ?? request.nextUrl.searchParams.get('backdropRatingsMax'));
   const logoMode = normalizeLogoMode(tokenConfig.logoMode || request.nextUrl.searchParams.get('logoMode'));
   const logoFontVariant = normalizeLogoFontVariant(tokenConfig.logoFontVariant || request.nextUrl.searchParams.get('logoFontVariant'));
   
@@ -6165,6 +6167,7 @@ export async function GET(
     imageType === 'poster' ? String(posterAnimeImageTextParam || '-') : '-',
     imageType === 'backdrop' ? String(backdropAnimeImageTextParam || '-') : '-',
     imageType === 'logo' ? String(logoRatingsMax ?? 'auto') : '-',
+    imageType === 'backdrop' ? String(backdropRatingsMax ?? 'auto') : '-',
     imageType === 'logo' ? logoMode : DEFAULT_LOGO_MODE,
     imageType === 'logo' ? logoFontVariant : DEFAULT_LOGO_FONT_VARIANT,
     imageType === 'logo' ? logoPrimary : DEFAULT_LOGO_CUSTOM_PRIMARY,
@@ -6931,6 +6934,7 @@ export async function GET(
         imageType === 'poster' ? String(posterAnimeImageTextParam || '-') : '-',
         imageType === 'backdrop' ? String(backdropAnimeImageTextParam || '-') : '-',
         imageType === 'logo' ? String(logoRatingsMax ?? 'auto') : '-',
+        imageType === 'backdrop' ? String(backdropRatingsMax ?? 'auto') : '-',
         imageType === 'logo' ? logoMode : DEFAULT_LOGO_MODE,
         imageType === 'logo' ? logoFontVariant : DEFAULT_LOGO_FONT_VARIANT,
         imageType === 'logo' ? logoPrimary : DEFAULT_LOGO_CUSTOM_PRIMARY,
@@ -8468,10 +8472,11 @@ export async function GET(
         ? getPosterRatingLayoutMaxBadges(posterRatingsLayout, posterRatingsMaxPerSide)
         : null;
       const logoRatingLimit = useLogoBadgeLayout ? logoRatingsMax : null;
+      const backdropRatingLimit = useBackdropBadgeLayout ? backdropRatingsMax : null;
       let cappedRatingBadges = usePosterBadgeLayout
         ? (typeof posterRatingLimit === 'number' ? ratingBadges.slice(0, posterRatingLimit) : [...ratingBadges])
         : useBackdropBadgeLayout
-          ? [...ratingBadges]
+          ? (typeof backdropRatingLimit === 'number' ? ratingBadges.slice(0, backdropRatingLimit) : [...ratingBadges])
           : useLogoBadgeLayout
             ? (typeof logoRatingLimit === 'number' ? ratingBadges.slice(0, logoRatingLimit) : [...ratingBadges])
             : [...ratingBadges];

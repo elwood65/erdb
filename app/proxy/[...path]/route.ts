@@ -87,6 +87,7 @@ const buildProxyConfigFromToken = (
 
   if (typeof t.posterRatingsMaxPerSide === 'number') config.posterRatingsMaxPerSide = String(t.posterRatingsMaxPerSide);
   if (typeof t.logoRatingsMax === 'number') config.logoRatingsMax = String(t.logoRatingsMax);
+  if (typeof t.backdropRatingsMax === 'number') config.backdropRatingsMax = String(t.backdropRatingsMax);
 
   if (proxyOverrides && typeof proxyOverrides === 'object') {
     if (typeof proxyOverrides.posterEnabled === 'boolean') config.posterEnabled = proxyOverrides.posterEnabled;

@@ -48,6 +48,7 @@ export function WorkspaceControlsPanel({ state, derived, actions }: WorkspaceCon
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     backdropRatingsLayout,
+    backdropRatingsMax,
     backdropRatingsSize,
     thumbnailRatingsLayout,
     thumbnailSize,
@@ -96,6 +97,7 @@ export function WorkspaceControlsPanel({ state, derived, actions }: WorkspaceCon
     setPosterRatingsMaxPerSide,
     setPosterVerticalBadgeContent,
     setBackdropRatingsLayout,
+    setBackdropRatingsMax,
     setBackdropRatingsSize,
     setBackdropVerticalBadgeContent,
     setThumbnailRatingsLayout,
@@ -336,6 +338,11 @@ export function WorkspaceControlsPanel({ state, derived, actions }: WorkspaceCon
                 </div>
               </div>
             )}
+            <div className="pt-2 flex items-center gap-3">
+              <span className="text-xs font-medium text-slate-400">Max Badges</span>
+              <input type="number" min={1} max={20} value={backdropRatingsMax ?? ''} onChange={(e) => setBackdropRatingsMax(e.target.value === '' ? null : parseInt(e.target.value, 10))} placeholder="Auto" className={`w-20 ${INPUT_CLASS}`} />
+              <button onClick={() => setBackdropRatingsMax(null)} className="rounded-xl border border-white/5 bg-[#0a0a0a] px-4 py-2.5 text-xs font-medium text-slate-300 hover:bg-[#121212]">Auto</button>
+            </div>
           </motion.div>
         )}
 

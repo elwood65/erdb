@@ -60,6 +60,10 @@ import {
   normalizeLogoRatingsMax,
 } from '@/lib/logoRatingsMax';
 import {
+  DEFAULT_BACKDROP_RATINGS_MAX,
+  normalizeBackdropRatingsMax,
+} from '@/lib/backdropRatingsMax';
+import {
   DEFAULT_LOGO_MODE,
   isLogoMode,
   normalizeLogoMode,
@@ -373,6 +377,7 @@ const buildAiometadataPattern = (options: {
   posterRatingsLayout: PosterRatingLayout;
   posterRatingsMaxPerSide: number | null;
   backdropRatingsLayout: BackdropRatingLayout;
+  backdropRatingsMax: number | null;
   backdropRatingsSize: BackdropRatingsSize;
   thumbnailRatingsLayout: ThumbnailRatingLayout;
   posterVerticalBadgeContent: VerticalBadgeContent;
@@ -424,6 +429,7 @@ const buildAiometadataPattern = (options: {
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     backdropRatingsLayout,
+    backdropRatingsMax,
     backdropRatingsSize,
     thumbnailRatingsLayout,
     posterVerticalBadgeContent,
@@ -503,6 +509,9 @@ const buildAiometadataPattern = (options: {
     params.push(['imageText', backdropImageText]);
     params.push(['backdropRatingsLayout', backdropRatingsLayout]);
     params.push(['backdropRatingsSize', backdropRatingsSize]);
+    if (backdropRatingsMax !== null) {
+      params.push(['backdropRatingsMax', String(backdropRatingsMax)]);
+    }
     if (backdropRatingsLayout === 'right-vertical' && backdropVerticalBadgeContent !== 'standard') {
       params.push(['backdropVerticalBadgeContent', backdropVerticalBadgeContent]);
     }
@@ -769,6 +778,7 @@ export default function HomePage({
   const [logoRatingStyle, setLogoRatingStyle] = useState<RatingStyle>('plain');
   const [posterRatingsMaxPerSide, setPosterRatingsMaxPerSide] = useState<number | null>(DEFAULT_POSTER_RATINGS_MAX_PER_SIDE);
   const [logoRatingsMax, setLogoRatingsMax] = useState<number | null>(5);
+  const [backdropRatingsMax, setBackdropRatingsMax] = useState<number | null>(DEFAULT_BACKDROP_RATINGS_MAX);
   const [logoMode, setLogoMode] = useState<LogoMode>(DEFAULT_LOGO_MODE);
   const [logoFontVariant, setLogoFontVariant] = useState<LogoFontVariant>(DEFAULT_LOGO_FONT_VARIANT);
   const [logoCustomPrimary, setLogoCustomPrimary] = useState(DEFAULT_LOGO_CUSTOM_PRIMARY);
@@ -1247,6 +1257,9 @@ export default function HomePage({
       }
       query.set('backdropAnimeImageText', backdropAnimeImageText);
       query.set('backdropRatings', ratingsQuery);
+      if (backdropRatingsMax !== null) {
+        query.set('backdropRatingsMax', String(backdropRatingsMax));
+      }
     } else if (previewType === 'thumbnail') {
       query.set('thumbnailRatings', ratingsQuery);
     } else {
@@ -1374,6 +1387,7 @@ export default function HomePage({
     shouldShowQualityBadgesPosition,
     posterRatingsLayout,
     posterRatingsMaxPerSide,
+    backdropRatingsMax,
     logoRatingsMax,
     logoMode,
     logoFontVariant,
@@ -1507,6 +1521,9 @@ export default function HomePage({
     if (logoRatingsMax !== null) {
       config.logoRatingsMax = logoRatingsMax;
     }
+    if (backdropRatingsMax !== null) {
+      config.backdropRatingsMax = backdropRatingsMax;
+    }
     if (logoMode !== DEFAULT_LOGO_MODE) {
       config.logoMode = logoMode;
     }
@@ -1579,6 +1596,7 @@ export default function HomePage({
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     logoRatingsMax,
+    backdropRatingsMax,
     backdropRatingsLayout,
     backdropRatingsSize,
     thumbnailRatingsLayout,
@@ -1764,6 +1782,9 @@ export default function HomePage({
     if (logoRatingsMax !== null) {
       config.logoRatingsMax = String(logoRatingsMax);
     }
+    if (backdropRatingsMax !== null) {
+      config.backdropRatingsMax = String(backdropRatingsMax);
+    }
     if (backdropRatingsLayout) {
       config.backdropRatingsLayout = backdropRatingsLayout;
     }
@@ -1833,6 +1854,7 @@ export default function HomePage({
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     logoRatingsMax,
+    backdropRatingsMax,
     backdropRatingsLayout,
     backdropRatingsSize,
     thumbnailRatingsLayout,
@@ -2027,6 +2049,7 @@ export default function HomePage({
       logoCustomSecondary,
       logoCustomOutline,
       logoRatingsMax,
+      backdropRatingsMax,
       posterRatingsLayout,
       posterRatingsMaxPerSide,
       backdropRatingsLayout,
@@ -2206,6 +2229,11 @@ export default function HomePage({
       setLogoRatingsMax(null);
     } else if (typeof payload.logoRatingsMax === 'number' || typeof payload.logoRatingsMax === 'string') {
       setLogoRatingsMax(normalizeLogoRatingsMax(payload.logoRatingsMax));
+    }
+    if (payload.backdropRatingsMax === null) {
+      setBackdropRatingsMax(null);
+    } else if (typeof payload.backdropRatingsMax === 'number' || typeof payload.backdropRatingsMax === 'string') {
+      setBackdropRatingsMax(normalizeBackdropRatingsMax(payload.backdropRatingsMax));
     }
 
     const normalizeRatingArray = (value: unknown) => {
@@ -2413,6 +2441,7 @@ export default function HomePage({
       posterRatingsLayout,
       posterRatingsMaxPerSide,
       backdropRatingsLayout,
+      backdropRatingsMax,
       backdropRatingsSize,
       thumbnailRatingsLayout,
       posterVerticalBadgeContent,
@@ -2461,6 +2490,7 @@ export default function HomePage({
     posterRatingsLayout,
     posterRatingsMaxPerSide,
     logoRatingsMax,
+    backdropRatingsMax,
     backdropRatingsLayout,
     backdropRatingsSize,
     thumbnailRatingsLayout,
@@ -2549,6 +2579,7 @@ export default function HomePage({
       posterRatingsLayout,
       posterRatingsMaxPerSide,
       logoRatingsMax,
+      backdropRatingsMax,
       backdropRatingsLayout,
       backdropRatingsSize,
       thumbnailRatingsLayout,
@@ -2599,6 +2630,7 @@ export default function HomePage({
       posterRatingsLayout,
       posterRatingsMaxPerSide,
       logoRatingsMax,
+      backdropRatingsMax,
       backdropRatingsLayout,
       backdropRatingsSize,
       thumbnailRatingsLayout,
@@ -2703,6 +2735,7 @@ export default function HomePage({
       posterRatingsLayout,
       posterRatingsMaxPerSide,
       logoRatingsMax,
+      backdropRatingsMax,
       backdropRatingsLayout,
       backdropRatingsSize,
       thumbnailRatingsLayout,
@@ -2882,6 +2915,7 @@ export default function HomePage({
       logoCustomSecondary,
       logoCustomOutline,
       backdropRatingsLayout,
+      backdropRatingsMax,
       backdropRatingsSize,
       thumbnailRatingsLayout,
       posterVerticalBadgeContent,
@@ -2954,6 +2988,7 @@ export default function HomePage({
       setLogoCustomSecondary,
       setLogoCustomOutline,
       setBackdropRatingsLayout,
+      setBackdropRatingsMax,
       setBackdropRatingsSize,
       setThumbnailRatingsLayout,
       setPosterVerticalBadgeContent,
